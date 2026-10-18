@@ -1,0 +1,14 @@
+node_modules/
+dist/
+# Web app builds staged by the install/update scripts
+dist.new/
+dist.old/
+server/data/
+*.log
+.DS_Store
+# Settings and runtime files of an installed copy
+config.env
+logs/
+.env
+# Local tool settings
+.claude/

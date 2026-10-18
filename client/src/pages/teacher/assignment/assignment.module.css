@@ -1,0 +1,118 @@
+.modeCard {
+  height: 100%;
+  padding: var(--mantine-spacing-md);
+  border: 2px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
+  background-color: light-dark(var(--mantine-color-white), var(--mantine-color-dark-7));
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.modeCard:hover {
+  border-color: light-dark(var(--mantine-color-gray-5), var(--mantine-color-dark-2));
+}
+
+.modeCard[data-checked] {
+  border-color: var(--mantine-primary-color-filled);
+  background-color: var(--mantine-primary-color-light);
+  box-shadow: var(--mantine-shadow-xs);
+}
+
+.modeCard:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+
+/* Late rows in the submissions table: red edge + tint so they can't be missed. */
+.lateRow {
+  background-color: var(--mantine-color-red-light);
+}
+
+.lateRow > td:first-child {
+  box-shadow: inset 4px 0 0 var(--mantine-color-red-filled);
+}
+
+/*
+ * Grading panel next to the workbook: stays in view while the page scrolls, and scrolls on its own when it is
+ * taller than the window (long feedback), with Save / Save & next pinned to its bottom edge.
+ * Once stuck it is at most the window height below the header. Before that, StickyPanel sets --sticky-panel-top to
+ * where it starts, so it still ends at the bottom of the window (but never gets shorter than 20rem).
+ */
+@media (min-width: $mantine-breakpoint-lg) {
+  .stickyPanel {
+    position: sticky;
+    top: calc(60px + var(--mantine-spacing-md));
+    max-height: min(
+      calc(100dvh - 60px - 2 * var(--mantine-spacing-md)),
+      max(20rem, calc(100dvh - var(--sticky-panel-top, 0px) - var(--mantine-spacing-md)))
+    );
+    overflow-y: auto;
+  }
+
+  /* Card clips with overflow: hidden, which would make it the sticky container of the actions below. */
+  .stickyPanel .gradingCard {
+    overflow: visible;
+  }
+
+  .stickyPanel .panelActions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    padding-block: var(--mantine-spacing-xs);
+    background-color: light-dark(var(--mantine-color-white), var(--mantine-color-dark-6));
+  }
+}
+
+.statCard {
+  height: 100%;
+}
+
+.statCardButton {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.statCardButton:hover {
+  border-color: light-dark(var(--mantine-color-gray-5), var(--mantine-color-dark-2));
+  box-shadow: var(--mantine-shadow-sm);
+}
+
+.statCardButton:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+
+.storedFile {
+  border: 1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
+  background-color: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
+}
+
+.removedFile {
+  border: 1px dashed light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-3));
+}
+
+.saveBar {
+  position: sticky;
+  bottom: var(--mantine-spacing-md);
+  z-index: 5;
+}
+
+.countPill {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  background-color: light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4));
+}

@@ -1,0 +1,371 @@
+.root {
+  --ss-row-h: 24px;
+  --ss-header-h: 24px;
+  --ss-line: light-dark(#dfe3e8, var(--mantine-color-dark-5));
+  --ss-border: light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
+  --ss-bg: light-dark(var(--mantine-color-white), var(--mantine-color-dark-7));
+  --ss-header-bg: light-dark(#f3f4f6, var(--mantine-color-dark-6));
+  --ss-header-fg: light-dark(var(--mantine-color-gray-7), var(--mantine-color-dark-1));
+  --ss-header-active-bg: light-dark(var(--mantine-color-brand-1), alpha(var(--mantine-color-brand-8), 0.45));
+  --ss-header-active-fg: light-dark(var(--mantine-color-brand-9), var(--mantine-color-brand-1));
+  --ss-select: var(--mantine-color-brand-7);
+  --ss-correct-bg: light-dark(#dcf5e4, alpha(var(--mantine-color-green-7), 0.32));
+  --ss-incorrect-bg: light-dark(#fde2e2, alpha(var(--mantine-color-red-8), 0.36));
+  --ss-incorrect-border: light-dark(var(--mantine-color-red-6), var(--mantine-color-red-5));
+
+  overflow: hidden;
+  border: 1px solid var(--ss-border);
+  border-radius: var(--mantine-radius-md);
+  background: var(--ss-bg);
+}
+
+/* Toolbar + formula bar ------------------------------------------------ */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-xs) var(--mantine-spacing-md);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ss-border);
+  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
+}
+
+.formulaBar {
+  display: flex;
+  align-items: stretch;
+  min-height: 32px;
+  border-bottom: 1px solid var(--ss-border);
+  font-size: 13px;
+}
+
+.nameBox {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  min-width: 76px;
+  padding: 0 10px;
+  border-right: 1px solid var(--ss-border);
+  font-family: var(--mantine-font-family-monospace);
+  font-weight: 600;
+  color: var(--mantine-color-text);
+}
+
+.fx {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border-right: 1px solid var(--ss-border);
+  color: var(--mantine-color-dimmed);
+}
+
+.formulaText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+}
+
+.formulaValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formulaValue[data-formula] {
+  font-family: var(--mantine-font-family-monospace);
+}
+
+.formulaPlaceholder {
+  color: var(--mantine-color-dimmed);
+  font-style: italic;
+}
+
+.status {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--ss-border);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.status[data-status='correct'] {
+  background: var(--ss-correct-bg);
+  color: light-dark(var(--mantine-color-green-9), var(--mantine-color-green-2));
+}
+
+.status[data-status='incorrect'] {
+  background: var(--ss-incorrect-bg);
+  color: light-dark(var(--mantine-color-red-9), var(--mantine-color-red-2));
+}
+
+/* Grid ---------------------------------------------------------------- */
+
+.scroller {
+  position: relative;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--ss-bg);
+}
+
+.scroller:focus {
+  outline: none;
+}
+
+.scroller:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--mantine-color-blue-5);
+}
+
+.canvas {
+  position: relative;
+  width: max-content;
+}
+
+.table {
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  line-height: calc(var(--ss-row-h) - 1px);
+  font-variant-numeric: tabular-nums;
+  color: var(--mantine-color-text);
+  user-select: none;
+}
+
+.table th,
+.table td {
+  box-sizing: border-box;
+  height: var(--ss-row-h);
+  padding: 0 6px;
+  border-right: 1px solid var(--ss-line);
+  border-bottom: 1px solid var(--ss-line);
+  overflow: hidden;
+  white-space: pre;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: var(--ss-header-h);
+  text-align: center;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--ss-header-fg);
+  background: var(--ss-header-bg);
+  border-bottom-color: var(--ss-border);
+  border-right-color: var(--ss-border);
+  vertical-align: middle;
+  cursor: default;
+}
+
+.table th.rowHeader {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: center;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--ss-header-fg);
+  background: var(--ss-header-bg);
+  border-right-color: var(--ss-border);
+  vertical-align: middle;
+}
+
+.table thead th.corner {
+  left: 0;
+  z-index: 3;
+}
+
+.table th[data-active] {
+  background: var(--ss-header-active-bg);
+  color: var(--ss-header-active-fg);
+  font-weight: 700;
+}
+
+.table thead th[data-active] {
+  box-shadow: inset 0 -2px 0 var(--ss-select);
+}
+
+.table th.rowHeader[data-active] {
+  box-shadow: inset -2px 0 0 var(--ss-select);
+}
+
+.cell {
+  text-align: left;
+  cursor: cell;
+}
+
+.cell[data-align='right'] {
+  text-align: right;
+}
+
+.cell[data-align='center'] {
+  text-align: center;
+}
+
+.cell[data-merged] {
+  vertical-align: middle;
+}
+
+.cell[data-error] {
+  color: light-dark(var(--mantine-color-red-8), var(--mantine-color-red-4));
+}
+
+.cell[data-formula] {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12px;
+}
+
+.cell[data-hl='correct'] {
+  background: var(--ss-correct-bg);
+}
+
+.cell[data-hl='incorrect'] {
+  background: var(--ss-incorrect-bg);
+  box-shadow: inset 0 0 0 2px var(--ss-incorrect-border);
+}
+
+.cell[data-selected] {
+  outline: 2px solid var(--ss-select);
+  outline-offset: -2px;
+}
+
+.cell[data-hl='incorrect'][data-selected] {
+  box-shadow: inset 0 0 0 4px var(--ss-incorrect-border);
+  outline-color: light-dark(var(--mantine-color-dark-7), var(--mantine-color-white));
+}
+
+.spacer td {
+  padding: 0;
+  border: 0;
+  height: auto;
+}
+
+/* Stand-ins for the columns outside the rendered window. */
+.table .pad {
+  padding: 0;
+  border: 0;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.tooltip {
+  position: absolute;
+  z-index: 5;
+  max-width: 300px;
+  padding: 5px 10px;
+  border-radius: var(--mantine-radius-sm);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+  pointer-events: none;
+  background: light-dark(var(--mantine-color-gray-9), var(--mantine-color-gray-2));
+  color: light-dark(var(--mantine-color-white), var(--mantine-color-black));
+  box-shadow: var(--mantine-shadow-md);
+  transform: translate(-50%, calc(-100% - 6px));
+}
+
+.tooltip[data-below] {
+  transform: translate(-50%, 6px);
+}
+
+/* Sheet tabs ----------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-height: 34px;
+  padding: 0 8px;
+  overflow-x: auto;
+  border-top: 1px solid var(--ss-border);
+  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
+  scrollbar-width: thin;
+}
+
+.tab {
+  all: unset;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 0 14px;
+  margin-top: -1px;
+  font-size: 13px;
+  color: var(--mantine-color-dimmed);
+  border: 1px solid transparent;
+  border-top: 0;
+  border-radius: 0 0 var(--mantine-radius-sm) var(--mantine-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--mantine-color-text);
+  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5));
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--mantine-color-blue-5);
+  outline-offset: -2px;
+}
+
+.tab[aria-selected='true'] {
+  color: var(--ss-header-active-fg);
+  font-weight: 600;
+  background: var(--ss-bg);
+  border-color: var(--ss-border);
+  box-shadow: inset 0 -3px 0 var(--ss-select);
+}
+
+.tabName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mantine-color-white);
+  background: var(--mantine-color-red-filled);
+}
+
+.tabCount[data-ok] {
+  background: var(--mantine-color-green-filled);
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--mantine-spacing-xl) var(--mantine-spacing-md);
+}

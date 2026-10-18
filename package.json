@@ -1,0 +1,36 @@
+{
+  "name": "excel-autograder",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Upload Excel workbooks and grade them automatically against a teacher's answer key.",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c blue,magenta \"npm:dev -w server\" \"npm:dev -w client\"",
+    "setup": "node --disable-warning=ExperimentalWarning scripts/install.mjs",
+    "start": "node --disable-warning=ExperimentalWarning scripts/service.mjs start",
+    "stop": "node --disable-warning=ExperimentalWarning scripts/service.mjs stop",
+    "restart": "node --disable-warning=ExperimentalWarning scripts/service.mjs restart",
+    "status": "node --disable-warning=ExperimentalWarning scripts/service.mjs status",
+    "serve": "node --disable-warning=ExperimentalWarning scripts/service.mjs run",
+    "update": "node --disable-warning=ExperimentalWarning scripts/update.mjs",
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.mjs",
+    "restore": "node --disable-warning=ExperimentalWarning scripts/restore.mjs",
+    "seed": "node --disable-warning=ExperimentalWarning scripts/seed.mjs",
+    "test": "npm test -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
+    "build": "npm run build -w client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.5"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Marquette-Catholic-High-School/ExcelAutoGrader.git"
+  }
+}

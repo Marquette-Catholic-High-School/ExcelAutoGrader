@@ -39,6 +39,7 @@ import {
   bold,
   buildClient,
   checkNode,
+  checkPortPermission,
   confirm,
   dataDir,
   dim,
@@ -548,6 +549,8 @@ runMain(async () => {
 
   const config = readConfig();
   const before = await serverStatus(config);
+  // Don't stop a running app that could not be started again (e.g. Linux after a Node.js upgrade on port 80).
+  if (before.running) await checkPortPermission(config);
   const state = newState(current, latest, before.running);
 
   if (!mode) {

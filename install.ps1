@@ -6,7 +6,7 @@
 #     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Marquette-Catholic-High-School/ExcelAutoGrader/main/install.ps1))) --demo --port 8080
 #
 #   Already downloaded: double-click install.cmd, or in the folder run
-#     powershell -ExecutionPolicy Bypass -File .\install.ps1 [--demo] [--no-demo] [--port <n>] [--host 0.0.0.0] [--start] [--no-start] [--yes]
+#     powershell -ExecutionPolicy Bypass -File .\install.ps1 [--demo] [--no-demo] [--port <n>] [--host <ip>] [--start] [--no-start] [--yes]
 #
 #   Environment overrides: EXCEL_AUTOGRADER_DIR (install folder), EXCEL_AUTOGRADER_REPO, EXCEL_AUTOGRADER_BRANCH
 #   (Keep this file ASCII-only: Windows PowerShell 5.1 misreads UTF-8 files without a BOM.)
@@ -39,8 +39,8 @@ function Install-ExcelAutograder {
         Write-Host 'Options:'
         Write-Host '  --demo           load the demo teacher, students and assignments (asks before replacing existing data)'
         Write-Host '  --no-demo        start with an empty database'
-        Write-Host '  --port <n>       port to use (default 3001, saved in config.env)'
-        Write-Host '  --host <ip>      127.0.0.1 (this computer only, default) or 0.0.0.0 (other computers on the network too)'
+        Write-Host '  --port <n>       port to use (default 80, saved in config.env)'
+        Write-Host '  --host <ip>      0.0.0.0 (other computers on the network too, default) or 127.0.0.1 (this computer only)'
         Write-Host '  --start          start the app at the end without asking'
         Write-Host '  --no-start       do not start the app at the end'
         Write-Host '  --yes            use the defaults without asking any questions'

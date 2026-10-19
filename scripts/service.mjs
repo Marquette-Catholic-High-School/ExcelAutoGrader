@@ -17,6 +17,7 @@ import {
   acquireLock,
   bold,
   checkNode,
+  checkPortPermission,
   ensureOwner,
   info,
   readConfig,
@@ -50,6 +51,7 @@ runMain(async () => {
       if (!(await stopServer(config))) info('Excel Autograder is not running.');
       break;
     case 'restart':
+      await checkPortPermission(config);
       await stopServer(config);
       await startServer(config);
       break;

@@ -20,6 +20,14 @@ import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const IS_WINDOWS = process.platform === 'win32';
+const IS_MAC = process.platform === 'darwin';
+
+/**
+ * New installs on Windows and Linux host the app for the network on port 80, so people open http://<computer name>.
+ * macOS (usually a teacher's own laptop) keeps a private port that needs no special permission.
+ */
+export const DEFAULT_PORT = IS_MAC ? '3001' : '80';
+export const DEFAULT_HOST = IS_MAC ? '127.0.0.1' : '0.0.0.0';
 export const MIN_NODE = { major: 22, minor: 13 };
 export const CONFIG_FILE = path.join(ROOT, 'config.env');
 export const LOG_DIR = path.join(ROOT, 'logs');
@@ -363,12 +371,13 @@ const DEFAULT_CONFIG = `# Excel Autograder settings, read when the app starts an
 # Restart the app after changing them: ${COMMANDS.restart}
 
 # Port the app listens on. Open http://localhost:<PORT> in a browser.
-PORT=3001
+# With 80 (the web's standard port) the address needs no port number: http://<this computer's name>.
+PORT=${DEFAULT_PORT}
 
 # 127.0.0.1 = only this computer can open the app.
 # 0.0.0.0   = other computers on your network can open it too, at http://<this computer's name or IP>:<PORT>.
 #             Anyone who can reach it can create an account, so only do this on a network you trust.
-HOST=127.0.0.1
+HOST=${DEFAULT_HOST}
 
 # Folder for the database and uploaded workbooks. Leave empty to use server/data inside the install folder.
 # A relative path is relative to the install folder; ~ means your home folder.
@@ -418,13 +427,15 @@ export function dataDir(config = readConfig()) {
 
 export function appUrl(config = readConfig()) {
   const host = !config.HOST || ['127.0.0.1', '0.0.0.0', '::', 'localhost'].includes(config.HOST) ? 'localhost' : config.HOST;
-  return `http://${host}:${config.PORT || '3001'}`;
+  const port = config.PORT || DEFAULT_PORT;
+  // Port 80 is the browser's default, so the address needs no port number.
+  return Number(port) === 80 ? `http://${host}` : `http://${host}:${port}`;
 }
 
 /** Address to probe for the health check (a wildcard bind is reachable on loopback). */
 function healthUrl(config) {
   const host = !config.HOST || ['0.0.0.0', '::', 'localhost'].includes(config.HOST) ? '127.0.0.1' : config.HOST;
-  return `http://${host.includes(':') ? `[${host}]` : host}:${config.PORT || '3001'}/api/health`;
+  return `http://${host.includes(':') ? `[${host}]` : host}:${config.PORT || DEFAULT_PORT}/api/health`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -583,8 +594,8 @@ function serverEnv(config, instance) {
   const env = {
     ...process.env,
     NODE_ENV: 'production',
-    PORT: config.PORT || '3001',
-    HOST: config.HOST || '127.0.0.1',
+    PORT: config.PORT || DEFAULT_PORT,
+    HOST: config.HOST || DEFAULT_HOST,
     DATA_DIR: dataDir(config),
     EXCEL_AUTOGRADER_INSTANCE: instance,
   };
@@ -719,31 +730,296 @@ function logTail(lines = 30) {
     .join('\n');
 }
 
-/** Fails early, with advice, when another program already uses the port. */
-async function ensurePortFree(config) {
-  const port = Number(config.PORT || '3001');
-  const host = config.HOST || '127.0.0.1';
-  const code = await new Promise((resolve) => {
+/** True when HOST lets other computers connect (anything but a loopback address). */
+export function isNetworkHost(host) {
+  return !['127.0.0.1', '::1', 'localhost'].includes(host || DEFAULT_HOST);
+}
+
+const SETCAP_PATHS = ['/usr/sbin/setcap', '/sbin/setcap', '/usr/bin/setcap', '/bin/setcap'];
+const setcapPath = () => SETCAP_PATHS.find((file) => fs.existsSync(file)) ?? 'setcap';
+
+/** How to get a port below 1024 (such as 80) on systems that restrict them; empty when not applicable. */
+function lowPortAdvice(port, host) {
+  if (port >= 1024) return '';
+  if (IS_MAC && host !== '0.0.0.0' && host !== '::') {
+    return `\n       On macOS, ports below 1024 only work with HOST=0.0.0.0 in ${CONFIG_FILE}` +
+      ' (which also lets other computers on the network open the app).';
+  }
+  if (process.platform === 'linux') {
+    return '\n       On Linux, ports below 1024 need permission. Run the installer again to grant it, or by hand' +
+      ' (again after upgrading Node.js):' +
+      `\n         sudo ${setcapPath()} cap_net_bind_service=+ep "${nodeBinary()}"` +
+      '\n       then start the app again (without sudo).';
+  }
+  return '';
+}
+
+/**
+ * Windows reports a port held by HTTP.sys (the built-in web server behind IIS, BranchCache, ...) as "access denied"
+ * rather than "in use"; ports below 1024 are never in Windows' reserved ranges.
+ */
+function windowsAccessAdvice(port) {
+  if (port < 1024) {
+    return `Port ${port} is taken by another program. On Windows this is usually IIS or another service that uses the` +
+      ' built-in web server HTTP.sys (netstat shows it as PID 4 "System"). To see which: netsh http show servicestate';
+  }
+  return `Windows does not allow the app to use port ${port}; it may be reserved (for example by Hyper-V or WSL).` +
+    ' To see reserved ports: netsh int ipv4 show excludedportrange protocol=tcp';
+}
+
+/** Which program usually holds a web port, and how to find it. */
+function portInUseAdvice(port) {
+  if (port !== 80 && port !== 443) return '';
+  if (IS_WINDOWS) {
+    return '\n       On Windows this is usually IIS or another web server. To see which program: netstat -ano | findstr ":80 "';
+  }
+  if (IS_MAC) return `\n       To see which program: sudo lsof -nP -iTCP:${port} -sTCP:LISTEN`;
+  return `\n       This is usually another web server (Apache or nginx). To see which: sudo ss -ltnp 'sport = :${port}'`;
+}
+
+/** The real Node.js executable (symlinks resolved), e.g. for setcap. */
+export function nodeBinary() {
+  try {
+    return fs.realpathSync(process.execPath);
+  } catch {
+    return process.execPath;
+  }
+}
+
+/** Tries to listen on the port briefly: null when it is free and allowed, otherwise the error code. */
+export function probePort(port, host) {
+  return new Promise((resolve) => {
     const probe = net.createServer();
     probe.once('error', (err) => resolve(err.code ?? 'ERROR'));
-    probe.listen({ port, host, exclusive: true }, () => probe.close(() => resolve(null)));
+    probe.listen({ port: Number(port), host, exclusive: true }, () => probe.close(() => resolve(null)));
   });
+}
+
+/** Like probePort, but in a fresh Node.js process (file capabilities only apply to newly started programs). */
+function probePortInNewProcess(port, host) {
+  const script =
+    "const s=require('net').createServer();s.once('error',e=>{console.log(e.code);process.exit(0)});" +
+    `s.listen({port:${Number(port)},host:${JSON.stringify(host)},exclusive:true},()=>{console.log('OK');s.close()})`;
+  const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  const code = (result.stdout || '').trim();
+  return code === 'OK' ? null : code || 'ERROR';
+}
+
+/** Whether some program is already listening on the port on this computer. */
+function isListening(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port: Number(port), host: '127.0.0.1' });
+    const done = (result) => {
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+    socket.setTimeout(1500, () => done(false));
+  });
+}
+
+/** Linux: probe in a fresh process too, since Node.js may have been given the low-port permission after we started. */
+async function probeFor(port, host) {
+  const code = await probePort(port, host);
+  return code === 'EACCES' && process.platform === 'linux' && port < 1024 ? probePortInNewProcess(port, host) : code;
+}
+
+/** Fails early, with advice, when the port is taken or not allowed. */
+async function ensurePortFree(config) {
+  const port = Number(config.PORT || DEFAULT_PORT);
+  const host = config.HOST || DEFAULT_HOST;
+  const code = await probeFor(port, host);
   if (!code) return;
-  const where = `in ${CONFIG_FILE} (for example PORT=${port === 3001 ? 3002 : port + 1})`;
+  const alternative = port === 80 ? 8080 : port === 3001 ? 3002 : port + 1;
+  const where = `in ${CONFIG_FILE} (for example PORT=${alternative})`;
   if (code === 'EADDRINUSE') {
     throw new ScriptError(
-      `Port ${port} is already used by another program.\n       Stop that program, or change PORT ${where}, then try again.`,
+      `Port ${port} is already used by another program.${portInUseAdvice(port)}` +
+        `\n       Stop that program, or change PORT ${where}, then try again.`,
     );
+  }
+  if (code === 'EACCES' && IS_WINDOWS) {
+    throw new ScriptError(`${windowsAccessAdvice(port)}\n       Stop that program, or change PORT ${where}, then try again.`);
   }
   if (code === 'EACCES') {
     throw new ScriptError(
-      `This computer does not allow the app to use port ${port}` +
-        `${IS_WINDOWS ? ' (Windows reserves some ports, e.g. for Hyper-V or WSL)' : ''}.\n       Change PORT ${where}, then try again.`,
+      `This computer does not allow the app to use port ${port}.` +
+        `${lowPortAdvice(port, host)}\n       Or change PORT ${where}, then try again.`,
     );
   }
   if (code === 'EADDRNOTAVAIL') {
     throw new ScriptError(`HOST=${host} in ${CONFIG_FILE} is not an address of this computer. Use 127.0.0.1 or 0.0.0.0.`);
   }
+}
+
+/**
+ * Before stopping a running app to restart or update it: on Linux, a Node.js upgrade removes the low-port permission,
+ * and the app could then not be started again. Refuses while the running app is still untouched.
+ */
+export async function checkPortPermission(config = readConfig()) {
+  const port = Number(config.PORT || DEFAULT_PORT);
+  const host = config.HOST || DEFAULT_HOST;
+  if (process.platform !== 'linux' || port >= 1024) return;
+  // Linux checks the permission before whether the port is taken, so this works while the app is running.
+  if ((await probePort(port, host)) === 'EACCES' && probePortInNewProcess(port, host) === 'EACCES') {
+    throw new ScriptError(
+      `This Node.js (${nodeBinary()}) may not use port ${port} (was Node.js upgraded?), so the running app was left alone.` +
+        lowPortAdvice(port, host),
+    );
+  }
+}
+
+/**
+ * Linux only lets administrators listen on ports below 1024. Offers to grant Node.js that one permission
+ * (setcap cap_net_bind_service), so the app keeps running as a normal user. Returns true when the port is usable.
+ */
+export async function grantLowPortPermission(port, host, ask) {
+  const node = nodeBinary();
+  const otherPort = () =>
+    warn(`Or use another port: run the installer again with --port 8080 (address http://<this computer>:8080).`);
+  warn(`Linux only lets administrators use ports below 1024, such as ${port}.`);
+  if (await isListening(port)) {
+    warn(`Another program already uses port ${port} (often Apache or nginx; to see which: sudo ss -ltnp 'sport = :${port}').`);
+    warn('Stop it, or run the installer again with --port 8080.');
+    return false;
+  }
+  if (node.startsWith('/snap/')) {
+    warn("This Node.js comes from a snap package, which can't be given that permission.");
+    warn('Install Node.js from nodejs.org or NodeSource instead, then run the installer again.');
+    otherPort();
+    return false;
+  }
+  const setcap = SETCAP_PATHS.find((file) => fs.existsSync(file));
+  if (!setcap) {
+    warn('The setcap tool is missing. Install it (Debian/Ubuntu: sudo apt install libcap2-bin), then run the installer again.');
+    otherPort();
+    return false;
+  }
+  const grant = `${setcap} cap_net_bind_service=+ep "${node}"`;
+  if (spawnSync('sudo', ['-V'], { stdio: 'ignore' }).error) {
+    warn(`sudo is not available. As root, run: ${grant}  then run the installer again.`);
+    otherPort();
+    return false;
+  }
+  info(`Node.js can be given just that permission: sudo ${grant}`);
+  if (!(await ask(`Allow Node.js to use port ${port}? (asks for your sudo password)`, true))) {
+    otherPort();
+    return false;
+  }
+  const interactive = process.stdin.isTTY;
+  const command = [setcap, 'cap_net_bind_service=+ep', node];
+  const result = run('sudo', interactive ? command : ['-n', ...command], { allowFail: true });
+  const after = result.status === 0 ? probePortInNewProcess(port, host) : null;
+  if (result.status === 0 && after === null) {
+    success(`Node.js may now use port ${port}. (After upgrading Node.js, run the installer again to keep this.)`);
+    return true;
+  }
+  if (result.status !== 0) {
+    warn(interactive ? 'The permission was not granted.' : 'sudo needs a password, and there is no terminal to ask for it.');
+    warn(`Run the installer in a terminal, or ask an administrator to run: sudo ${grant}`);
+  } else if (after === 'EADDRINUSE') {
+    warn(`Node.js may now use port ${port}, but another program already uses it (often Apache or nginx).`);
+  } else if (after === 'EACCES') {
+    warn('The permission was set, but Node.js still cannot use the port. Is Node.js installed on a drive mounted');
+    warn('"nosuid"? Install it elsewhere (for example from NodeSource, into /usr).');
+  } else {
+    warn(`Could not check the port after granting the permission (${after}).`);
+  }
+  otherPort();
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Windows Firewall                                                   */
+/* ------------------------------------------------------------------ */
+
+const POWERSHELL = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+
+/** Runs a PowerShell script (passed encoded, so no quoting problems); never throws. */
+function powershell(script) {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  try {
+    return run(POWERSHELL, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {
+      capture: true,
+      allowFail: true,
+    });
+  } catch (err) {
+    return { status: null, stdout: '', stderr: err.message };
+  }
+}
+
+const psQuote = (text) => `'${String(text).replaceAll("'", "''")}'`;
+const firewallRuleName = (port) => `Excel Autograder (TCP ${Number(port)})`;
+
+/** PowerShell that removes inbound Block rules for this Node.js (left behind by a dismissed firewall pop-up). */
+const removeNodeBlockRules = () =>
+  `Get-NetFirewallApplicationFilter | Where-Object { $_.Program -ieq ${psQuote(nodeBinary())} } | Get-NetFirewallRule |` +
+  " Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' -and $_.Enabled -eq 'True' } | Remove-NetFirewallRule";
+
+/**
+ * What Windows Firewall does for the app's port: is there an enabled inbound Allow rule, are there Block rules for
+ * Node.js (they win over Allow rules), and which networks are "Public" (where a Domain/Private rule doesn't apply).
+ */
+export function firewallStatus(port) {
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$allow = [bool](Get-NetFirewallRule -DisplayName ${psQuote(firewallRuleName(port))} | Where-Object {` +
+      " $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' -and $_.Direction -eq 'Inbound' })",
+    `$block = @(Get-NetFirewallApplicationFilter | Where-Object { $_.Program -ieq ${psQuote(nodeBinary())} } |` +
+      " Get-NetFirewallRule | Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' -and $_.Enabled -eq 'True' } |" +
+      ' ForEach-Object { $_.DisplayName })',
+    "$public = @(Get-NetConnectionProfile | Where-Object { $_.NetworkCategory -eq 'Public' } | ForEach-Object { $_.Name })",
+    '[pscustomobject]@{ allow = $allow; block = $block; public = $public } | ConvertTo-Json -Compress',
+  ].join('\n');
+  const result = powershell(script);
+  try {
+    const parsed = JSON.parse(result.stdout.trim());
+    const list = (value) => (Array.isArray(value) ? value : value ? [value] : []).map(String);
+    return { known: true, allow: !!parsed.allow, block: list(parsed.block), public: list(parsed.public) };
+  } catch {
+    return { known: false, allow: false, block: [], public: [] };
+  }
+}
+
+/** Whether this process already runs with administrator rights (then no UAC prompt is needed). */
+export function isElevated() {
+  const result = powershell(
+    'if (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(' +
+      '[Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }',
+  );
+  return result.status === 0;
+}
+
+/** The PowerShell an administrator runs to let other computers reach the port. */
+export function firewallCommands(port) {
+  return [
+    `New-NetFirewallRule -DisplayName ${psQuote(firewallRuleName(port))} -Direction Inbound -Protocol TCP ` +
+      `-LocalPort ${Number(port)} -Action Allow -Profile Domain,Private`,
+    removeNodeBlockRules(),
+  ];
+}
+
+/**
+ * Adds the inbound Allow rule for the port (Domain and Private networks) and removes Block rules for Node.js. Needs
+ * administrator rights: run directly when this process has them, otherwise through Windows' UAC prompt.
+ */
+export function addFirewallRule(port, elevated = false) {
+  const name = psQuote(firewallRuleName(port));
+  const inner = [
+    "$ErrorActionPreference = 'Stop'",
+    `Remove-NetFirewallRule -DisplayName ${name} -ErrorAction SilentlyContinue`,
+    `New-NetFirewallRule -DisplayName ${name} -Description 'Lets other computers open Excel Autograder.'` +
+      ` -Direction Inbound -Protocol TCP -LocalPort ${Number(port)} -Action Allow -Profile Domain,Private | Out-Null`,
+    removeNodeBlockRules(),
+  ].join('\n');
+  if (elevated) return powershell(inner).status === 0;
+  const innerEncoded = Buffer.from(inner, 'utf16le').toString('base64');
+  const outer =
+    "$p = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Verb RunAs -Wait -PassThru -WindowStyle Hidden " +
+    `-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','${innerEncoded}'; ` +
+    'if ($p) { exit $p.ExitCode } else { exit 1 }';
+  return powershell(outer).status === 0;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -770,7 +1046,7 @@ export async function startServer(config = readConfig()) {
   }
   if (status.answering) {
     throw new ScriptError(
-      `Something else is already answering on port ${config.PORT || '3001'} (another copy of Excel Autograder, or a ` +
+      `Something else is already answering on port ${config.PORT || DEFAULT_PORT} (another copy of Excel Autograder, or a ` +
         'development server from "npm run dev"?).\n       Stop it, or change PORT in config.env, then try again.',
     );
   }
@@ -820,7 +1096,7 @@ export async function stopServer(config = readConfig()) {
   const status = await serverStatus(config);
   if (!status.running) {
     if (status.answering) {
-      warn(`The app on port ${config.PORT || '3001'} was not started by ${COMMANDS.start} (a development server?).`);
+      warn(`The app on port ${config.PORT || DEFAULT_PORT} was not started by ${COMMANDS.start} (a development server?).`);
       warn('Stop it in the terminal where it is running (Ctrl+C).');
     }
     return false;
@@ -852,7 +1128,7 @@ export async function serveForeground(config = readConfig()) {
   if (status.running) {
     throw new ScriptError(`Already running in the background at ${status.url}. Stop it first: ${COMMANDS.stop}`);
   }
-  if (status.answering) throw new ScriptError(`Something else is already answering on port ${config.PORT || '3001'}.`);
+  if (status.answering) throw new ScriptError(`Something else is already answering on port ${config.PORT || DEFAULT_PORT}.`);
   await ensurePortFree(config);
   const instance = crypto.randomUUID();
   const child = spawn(process.execPath, serverArgs(), { cwd: SERVER_DIR, env: serverEnv(config, instance), stdio: 'inherit' });

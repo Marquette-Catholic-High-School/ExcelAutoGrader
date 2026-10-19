@@ -54,7 +54,13 @@ winget on Windows).
 ## Install
 
 The installer downloads the app from GitHub, installs its dependencies, builds the web app, asks whether
-to load demo data, and starts it. When it finishes, open **http://localhost:3001**.
+to load demo data, and starts it.
+
+- **Windows and Linux**: the app is hosted on **port 80** for your network. Open **http://localhost** on that
+  computer. From other computers use **http://computer-name** if your network knows the name, or the
+  computer's IP address (the installer prints both). The installer takes care of what port 80 needs on
+  each system (see [Port 80 and network access](#port-80-and-network-access)).
+- **macOS**: the app stays private to that computer at **http://localhost:3001**.
 
 **Windows**: open PowerShell and run:
 
@@ -86,8 +92,8 @@ Installer options (add them after `./install.sh`, after `install.cmd` in a termi
 |---|---|
 | `--demo` | Load the demo teacher, students and assignments (asks before replacing existing data) |
 | `--no-demo` | Start with an empty database; open the app and choose "Create an account" to make a teacher account |
-| `--port <n>` | Port to use (default 3001) |
-| `--host 0.0.0.0` | Let other computers on your network open the app (default: this computer only) |
+| `--port <n>` | Port to use (default: 80 on Windows and Linux, 3001 on macOS) |
+| `--host <ip>` | `0.0.0.0`: other computers on your network can open the app (default on Windows and Linux). `127.0.0.1`: only this computer (default on macOS) |
 | `--start` | Start the app at the end without asking |
 | `--no-start` | Don't start the app at the end |
 | `--yes` | Use the defaults without asking any questions |
@@ -118,11 +124,45 @@ Windows: `restart-app.cmd`):
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `PORT` | `3001` | The app's address is http://localhost:PORT |
-| `HOST` | `127.0.0.1` | `127.0.0.1`: only this computer can open the app. `0.0.0.0`: other computers on the network can too, at http://this-computer's-name-or-IP:PORT. Anyone who can reach it can create an account, so only open it on a network you trust. |
+| `PORT` | `80` (Windows, Linux), `3001` (macOS) | The app's address is http://localhost:PORT (just http://localhost on port 80) |
+| `HOST` | `0.0.0.0` (Windows, Linux), `127.0.0.1` (macOS) | `127.0.0.1`: only this computer can open the app. `0.0.0.0`: other computers on the network can too, at http://this-computer's-name-or-IP:PORT. Anyone who can reach it can create an account, so only open it on a network you trust. |
 | `DATA_DIR` | `server/data` | Folder for the database and uploaded workbooks. A relative path is relative to the install folder; `~` means your home folder. |
 
 `config.env`, `logs/` and the data folder are not part of the repository, so updates never touch them.
+
+### Port 80 and network access
+
+On Windows and Linux the installer sets `PORT=80` and `HOST=0.0.0.0`, so people open the app by the
+computer's name alone, e.g. **http://grading-pc**, with no port number. During installation it also:
+
+- **Windows**: offers to add a Windows Defender Firewall rule for the port, so other computers can connect
+  (Windows asks for administrator permission once). It also removes rules that block Node.js, which an
+  earlier "Windows Defender Firewall has blocked some features" pop-up may have created. The rule covers
+  **domain and private networks**; if Windows treats your network as **Public**, the installer says so and
+  shows how to switch it to Private (Settings > Network & internet > the network > Network profile type).
+  Port 80 needs no other permission on Windows. If the installer says port 80 is already used, another web
+  server has it, usually IIS or another service built on Windows' HTTP.sys (`netsh http show servicestate`
+  lists them). Stop that service, or use another port.
+- **Linux**: ports below 1024 are normally for administrators only. The installer offers to give Node.js
+  just that one permission (`sudo setcap cap_net_bind_service=+ep <path to node>`), so the app still runs
+  as a normal user. The permission belongs to that Node.js program, for every user of the computer, so on a
+  shared server prefer a Node.js installed just for the app's account (e.g. with nvm). Upgrading Node.js
+  removes the permission: run the installer again afterwards (until then, restart and update refuse to
+  stop the running app, so it keeps working). If the server's firewall is on, allow the port:
+  `sudo ufw allow 80/tcp` (Ubuntu/Debian) or
+  `sudo firewall-cmd --permanent --add-port=80/tcp && sudo firewall-cmd --reload` (RHEL/Fedora). Don't start
+  the app with `sudo`; the scripts refuse to run as a different user than the one who installed it.
+- **macOS**: keeps port 3001 for this computer only. Port 80 also works on a Mac, but only together with
+  `HOST=0.0.0.0`.
+
+**Copies installed before port 80 became the default** keep their port, because updates never change
+`config.env`. To switch one, run its installer again with `--port 80 --host 0.0.0.0` (on Windows, in a
+terminal in the install folder: `install.cmd --port 80 --host 0.0.0.0`), which also sets up the firewall
+or permission. Or edit `config.env` yourself and restart the app.
+
+To keep the app private to one computer instead, install with `--host 127.0.0.1` (and any port), or set
+`HOST=127.0.0.1` in `config.env`. Anyone who can reach the app can create an account, so only open it on a
+network you trust.
 
 ## Updating
 

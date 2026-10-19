@@ -6,7 +6,7 @@
 #   Pass options after "bash -s --", e.g. ... | bash -s -- --demo --port 8080
 #
 #   Already downloaded (run inside the folder):
-#     ./install.sh [--demo] [--no-demo] [--port <n>] [--host 0.0.0.0] [--start] [--no-start] [--yes]
+#     ./install.sh [--demo] [--no-demo] [--port <n>] [--host <ip>] [--start] [--no-start] [--yes]
 #
 #   Environment overrides: EXCEL_AUTOGRADER_DIR (install folder), EXCEL_AUTOGRADER_REPO, EXCEL_AUTOGRADER_BRANCH
 set -euo pipefail
@@ -34,8 +34,9 @@ Excel Autograder installer for macOS and Linux.
 Options:
   --demo           load the demo teacher, students and assignments (asks before replacing existing data)
   --no-demo        start with an empty database
-  --port <n>       port to use (default 3001, saved in config.env)
-  --host <ip>      127.0.0.1 (this computer only, default) or 0.0.0.0 (other computers on the network too)
+  --port <n>       port to use (default 80 on Linux, 3001 on macOS; saved in config.env)
+  --host <ip>      0.0.0.0 (other computers on the network too; default on Linux) or
+                   127.0.0.1 (this computer only; default on macOS)
   --start          start the app at the end without asking
   --no-start       don't start the app at the end
   --yes            use the defaults without asking any questions

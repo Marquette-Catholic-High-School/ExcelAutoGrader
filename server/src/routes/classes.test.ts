@@ -321,7 +321,7 @@ describe('roster', () => {
   const listStudents = async (classId = cls.id) =>
     (await srv.request<StudentInfo[]>('GET', `/api/classes/${classId}/students`, { token: teacher.token })).body;
 
-  it('creates new accounts with a temporary password the student must change', async () => {
+  it('invites new emails as pending accounts that have no password yet', async () => {
     const email = uniqueEmail('ada');
     const res = await addStudents(teacher.token, cls.id, [
       { name: ' Ada Lovelace ', email: `  ${email.toUpperCase()} ` },
@@ -331,20 +331,36 @@ describe('roster', () => {
     assert.equal(res.body.added.length, 1);
     const [result] = res.body.added;
     assert.equal(result.created, true);
+    assert.equal(result.pending, true);
     assert.equal(result.alreadyEnrolled, false);
+    assert.equal('tempPassword' in result, false);
     assert.equal(result.student.name, 'Ada Lovelace');
     assert.equal(result.student.email, email);
-    assert.equal(result.student.mustChangePassword, true);
+    assert.equal(result.student.pending, true);
+    assert.equal(result.student.mustChangePassword, false);
     assert.equal(result.student.canResetPassword, true);
     assert.ok(!Number.isNaN(Date.parse(result.student.joinedAt)));
-    const stored = dbm.get<{ created_by_teacher_id: number | null }>(
-      'SELECT created_by_teacher_id FROM users WHERE id = ?',
+    const stored = dbm.get<{ created_by_teacher_id: number | null; password_hash: string; placeholder_name: number }>(
+      'SELECT created_by_teacher_id, password_hash, placeholder_name FROM users WHERE id = ?',
       result.student.id,
     );
     assert.equal(stored?.created_by_teacher_id, teacher.user.id, 'the creating teacher is recorded');
-    const tempPassword = result.tempPassword!;
-    assert.equal(typeof tempPassword, 'string');
+    assert.equal(stored?.password_hash, '');
+    assert.equal(stored?.placeholder_name, 0);
+    assert.equal((await listStudents()).find((s) => s.email === email)?.pending, true);
+    assert.equal((await login(email, '')).status, 400);
+    assert.equal((await login(email, 'anything-at-all')).status, 401);
+
+    // "Create a temporary password" ends the invitation: the student signs in instead of signing up.
+    const reset = await srv.request<{ tempPassword: string }>(
+      'POST',
+      `/api/classes/${cls.id}/students/${result.student.id}/reset-password`,
+      { token: teacher.token },
+    );
+    assert.equal(reset.status, 200);
+    const tempPassword = reset.body.tempPassword;
     assert.ok(tempPassword.length >= 8);
+    assert.equal((await listStudents()).find((s) => s.email === email)?.pending, false);
 
     const signedIn = await login(email, tempPassword);
     assert.equal(signedIn.status, 200);
@@ -413,16 +429,17 @@ describe('roster', () => {
     ]);
     assert.equal(res.status, 200);
 
-    assert.equal(res.body.added.length, 1);
+    assert.equal(res.body.added.length, 2);
     assert.equal(res.body.added[0].student.email, dupEmail);
     assert.equal(res.body.added[0].student.name, 'Dup Second');
     assert.equal(res.body.added[0].created, true);
+    assert.match(res.body.added[1].student.email, /^nameless\./);
+    assert.equal(res.body.added[1].student.name, 'Nameless', 'a blank name gets a placeholder from the email');
 
     assert.deepEqual(
       res.body.errors.map((e) => e.name || e.email),
-      ['Bad Email', 'Teacher Person', 'No Email', res.body.errors[3].email, 'Myself', 'x'.repeat(101)],
+      ['Bad Email', 'Teacher Person', 'No Email', 'Myself', 'x'.repeat(101)],
     );
-    assert.match(res.body.errors[3].email, /^nameless\./);
     assert.ok(res.body.errors.every((e) => e.error.length > 0));
 
     const roster = await listStudents();
@@ -438,7 +455,7 @@ describe('roster', () => {
     const blank = await addStudents(teacher.token, cls.id, [{ name: ' ', email: ' ' }]);
     assert.equal(blank.status, 400);
 
-    const tooMany = Array.from({ length: 501 }, (_, i) => ({ name: `S${i}`, email: `s${i}@bulk.example.test` }));
+    const tooMany = Array.from({ length: 1001 }, (_, i) => ({ name: `S${i}`, email: `s${i}@bulk.example.test` }));
     const big = await addStudents(teacher.token, cls.id, tooMany);
     assert.equal(big.status, 400);
     assert.ok(big.body.fields.students);
@@ -450,20 +467,51 @@ describe('roster', () => {
     assert.equal(notArray.status, 400);
   });
 
-  it('adds 500 students in one request', async () => {
+  it('adds 1000 students in one request', async () => {
     const bulkClass = await createClass(teacher.token, 'Lecture hall');
-    const rows = Array.from({ length: 500 }, (_, i) => ({ name: `Student ${i}`, email: uniqueEmail('bulk') }));
+    const rows = Array.from({ length: 1000 }, (_, i) => ({
+      name: i % 2 ? `Student ${i}` : '',
+      email: uniqueEmail('bulk'),
+    }));
+    const started = Date.now();
     const res = await addStudents(teacher.token, bulkClass.id, rows);
     assert.equal(res.status, 200);
-    assert.equal(res.body.added.length, 500);
+    assert.ok(Date.now() - started < 5000, 'no password hashing slows it down');
+    assert.equal(res.body.added.length, 1000);
     assert.deepEqual(res.body.errors, []);
-    assert.ok(res.body.added.every((a) => a.created && a.tempPassword));
-    assert.equal(new Set(res.body.added.map((a) => a.tempPassword)).size > 1, true);
+    assert.ok(res.body.added.every((a) => a.created && a.pending && a.student.pending && !('tempPassword' in a)));
+    assert.equal(res.body.added[0].student.name, 'Bulk');
+    assert.equal(res.body.added[1].student.name, 'Student 1');
 
-    const sample = res.body.added[123];
-    assert.equal((await login(sample.student.email, sample.tempPassword!)).status, 200);
     const summary = await srv.request<ClassSummary>('GET', `/api/classes/${bulkClass.id}`, { token: teacher.token });
-    assert.equal(summary.body.studentCount, 500);
+    assert.equal(summary.body.studentCount, 1000);
+  });
+
+  it('fills in a made-up name when the teacher adds the email again with a name', async () => {
+    const email = uniqueEmail('jane.doe');
+    const first = await addStudents(teacher.token, cls.id, [{ name: '', email }]);
+    assert.equal(first.body.added[0].student.name, 'Jane Doe');
+
+    const second = await addStudents(teacher.token, cls.id, [{ name: 'Jane Doe-Smith', email }]);
+    assert.equal(second.body.added[0].alreadyEnrolled, true);
+    assert.equal(second.body.added[0].student.name, 'Jane Doe-Smith');
+    const third = await addStudents(teacher.token, cls.id, [{ name: 'Someone Else', email }]);
+    assert.equal(third.body.added[0].student.name, 'Jane Doe-Smith', 'a name the teacher gave is kept');
+  });
+
+  it('makes placeholder names from the part before the @', () => {
+    const cases: [string, string][] = [
+      ['jane.doe@school.edu', 'Jane Doe'],
+      ['JANE_DOE-SMITH@school.edu', 'Jane Doe Smith'],
+      ['jdoe2027@school.edu', 'Jdoe'],
+      ['2027.jane.doe@school.edu', 'Jane Doe'],
+      ['mary.o’brien@school.edu', 'Mary O Brien'],
+      ["mary.o'neil@school.edu", "Mary O'neil"],
+      ['ana+math@school.edu', 'Ana'],
+      ['józef.müller@school.edu', 'Józef Müller'],
+      ['20231234@school.edu', '20231234'],
+    ];
+    for (const [email, name] of cases) assert.equal(service.placeholderName(email), name, email);
   });
 
   it('lists students sorted by name', async () => {
@@ -485,6 +533,7 @@ describe('roster', () => {
       'joinedAt',
       'mustChangePassword',
       'name',
+      'pending',
     ]);
   });
 
@@ -621,18 +670,31 @@ describe('password resets across teachers', () => {
     const created = await addStudents(teacherA.token, classA.id, [{ name: 'Made By A', email: uniqueEmail('made') }]);
     const [student] = created.body.added;
     assert.equal(student.created, true);
+    const first = await reset(teacherA.token, classA.id, student.student.id);
+    assert.equal(first.status, 200);
 
     const { teacherB, classB, added } = await otherTeacherEnrolls(student.student.email);
     assert.equal(added.created, false);
     assert.equal(added.student.canResetPassword, false);
     assert.equal((await reset(teacherB.token, classB.id, student.student.id)).status, 403);
-    assert.equal((await login(student.student.email, student.tempPassword!)).status, 200);
+    assert.equal((await login(student.student.email, first.body.tempPassword)).status, 200);
 
     assert.equal((await roster(teacherA.token, classA.id)).find((s) => s.id === student.student.id)?.canResetPassword, true);
     const res = await reset(teacherA.token, classA.id, student.student.id);
     assert.equal(res.status, 200);
-    assert.equal((await login(student.student.email, student.tempPassword!)).status, 401);
+    assert.equal((await login(student.student.email, first.body.tempPassword)).status, 401);
     assert.equal((await login(student.student.email, res.body.tempPassword)).status, 200);
+  });
+
+  it('does not let another teacher create a password for a student someone else invited', async () => {
+    const invited = await addStudents(teacherA.token, classA.id, [{ name: '', email: uniqueEmail('invited') }]);
+    const [student] = invited.body.added;
+    const { teacherB, classB, added } = await otherTeacherEnrolls(student.student.email);
+    assert.equal(added.created, false);
+    assert.equal(added.pending, true);
+    assert.equal(added.student.canResetPassword, false);
+    assert.equal((await reset(teacherB.token, classB.id, student.student.id)).status, 403);
+    assert.equal((await roster(teacherA.token, classA.id)).find((s) => s.id === student.student.id)?.pending, true);
   });
 
   it('lets a teacher reset once the other teacher removed the student', async () => {

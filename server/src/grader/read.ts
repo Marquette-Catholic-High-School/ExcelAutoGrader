@@ -148,8 +148,10 @@ export function parseWorkbookBuffer(buf: Buffer, ext = ''): LoadedWorkbook {
 
   let wb: XLSX.WorkBook;
   try {
-    const options = semicolons ? { ...READ_OPTIONS, FS: ';' } : READ_OPTIONS;
-    wb = XLSX.read(container === 'text' ? withUtf8Bom(buf) : buf, options);
+    // Always a fresh copy: SheetJS writes to the options it is given (reading UTF-16 text sets `type: 'binary'`),
+    // which would break every later read if the shared constant were passed.
+    const options: XLSX.ParsingOptions = { ...READ_OPTIONS, ...(semicolons ? { FS: ';' } : {}) };
+    wb = XLSX.read(container === 'text' ? asUtf8Text(buf) : buf, options);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new WorkbookReadError(/password/i.test(message) ? MESSAGES.password : MESSAGES.unreadable);
@@ -274,19 +276,75 @@ function sniffContainer(buf: Buffer): Container {
   return control > sample.length * 0.1 ? 'binary' : 'text';
 }
 
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+
 /**
- * SheetJS decodes BOM-less text as Latin-1, which garbles "Café" in UTF-8 CSVs. Prefix a UTF-8 BOM when the
- * text is valid non-ASCII UTF-8 (HTML/XML files declare their own encoding and are left alone).
+ * SheetJS decodes BOM-less text as Latin-1, which garbles "Café" in UTF-8 CSVs and turns the Windows-1252 bytes
+ * 0x80-0x9F ("O’Brien", "Šimić") into invisible control characters. Text with a BOM, HTML/XML (which declare their
+ * own encoding) and plain ASCII are passed through; valid UTF-8 gets a UTF-8 BOM; anything else is decoded as the
+ * legacy encoding Excel saves "CSV" files in (decodeLegacyText) and passed on as UTF-8 with a BOM.
  */
-function withUtf8Bom(buf: Buffer): Buffer {
+function asUtf8Text(buf: Buffer): Buffer {
   if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf;
   if (buf[0] === 0xff || buf[0] === 0xfe) return buf;
   if (/^\s*</.test(buf.subarray(0, 256).toString('latin1'))) return buf;
   if (!buf.some((byte) => byte > 0x7f)) return buf;
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    return Buffer.concat([UTF8_BOM, buf]);
   } catch {
-    return buf;
+    return Buffer.concat([UTF8_BOM, Buffer.from(decodeLegacyText(buf), 'utf8')]);
   }
-  return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), buf]);
+}
+
+/**
+ * Windows-1252 characters of the bytes 0x80-0x9F (the rest of the code page is Latin-1). The five unassigned bytes
+ * keep their Latin-1 meaning. Written out because Node's TextDecoder('windows-1252') decodes this range as Latin-1.
+ */
+const CP1252_80_9F = '€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008DŽ\u008F\u0090‘’“”•–—˜™š›œ\u009DžŸ';
+
+function decodeCp1252(buf: Buffer): string {
+  const special = (ch: string) => CP1252_80_9F[ch.charCodeAt(0) - 0x80];
+  return buf.toString('latin1').replace(/[\x80-\x9f]/g, special);
+}
+
+/** Mac Roman (Excel for Mac's plain "Comma Separated Values"), or null when this Node build cannot decode it. */
+function decodeMacRoman(buf: Buffer): string | null {
+  try {
+    return new TextDecoder('macintosh').decode(buf);
+  } catch {
+    return null;
+  }
+}
+
+const is = (pattern: RegExp, ch: string | undefined) => ch !== undefined && pattern.test(ch);
+
+/**
+ * How much the non-ASCII characters of `text` look like real words. A letter counts +1, or -1 when the case changes
+ * oddly around it ("JosÈ", "OíBrien"). Between two letters, an apostrophe counts +1 ("O’Brien") and any other
+ * punctuation or symbol -1 ("Mu–oz"). Control characters count -2.
+ */
+function plausibility(text: string): number {
+  let score = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch.charCodeAt(0) < 0x80) continue;
+    const prev = text[i - 1];
+    const next = text[i + 1];
+    if (is(/\p{L}/u, ch)) {
+      const oddCase = (is(/\p{Lu}/u, ch) && is(/\p{Ll}/u, prev)) || (is(/\p{Ll}/u, ch) && is(/\p{Lu}/u, next));
+      score += oddCase ? -1 : 1;
+    } else if (is(/\p{Cc}/u, ch)) score -= 2;
+    else if (is(/[\p{P}\p{S}]/u, ch) && is(/\p{L}/u, prev) && is(/\p{L}/u, next)) {
+      score += /[’‘ʼ´]/.test(ch) ? 1 : -1;
+    }
+  }
+  return score;
+}
+
+/** Text that is not UTF-8: Windows-1252 unless the Mac Roman reading of it is clearly more plausible. */
+function decodeLegacyText(buf: Buffer): string {
+  const windows = decodeCp1252(buf);
+  const mac = decodeMacRoman(buf);
+  return mac !== null && plausibility(mac) > plausibility(windows) ? mac : windows;
 }

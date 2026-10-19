@@ -9,7 +9,7 @@ import { describe, test } from 'node:test';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'excel-autograder-db-test-'));
 process.env.DATA_DIR = dataDir;
 
-/** The users table as the first release created it (no created_by_teacher_id). */
+/** The users table as the first release created it (no created_by_teacher_id, pending or placeholder_name). */
 function writeOldDatabase(): void {
   const old = new DatabaseSync(path.join(dataDir, 'app.db'));
   old.exec(`
@@ -49,5 +49,21 @@ describe('database migrations', () => {
       'finn@old.test',
     );
     assert.deepEqual({ ...finn }, { name: 'Finn Murphy', created_by_teacher_id: null });
+  });
+
+  test('adds users.pending and users.placeholder_name (0 for existing accounts)', async () => {
+    const dbm = await import('./db.js');
+    const columns = dbm.all<{ name: string; notnull: number; dflt_value: unknown }>('PRAGMA table_info(users)');
+    for (const name of ['pending', 'placeholder_name']) {
+      const column = columns.find((c) => c.name === name);
+      assert.ok(column, `${name} added`);
+      assert.equal(column.notnull, 1);
+      assert.equal(column.dflt_value, '0');
+    }
+    const finn = dbm.get<{ pending: number; placeholder_name: number }>(
+      'SELECT pending, placeholder_name FROM users WHERE email = ?',
+      'finn@old.test',
+    );
+    assert.deepEqual({ ...finn }, { pending: 0, placeholder_name: 0 });
   });
 });

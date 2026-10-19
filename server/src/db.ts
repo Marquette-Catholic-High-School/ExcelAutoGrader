@@ -31,7 +31,9 @@ db.exec(`
     role TEXT NOT NULL CHECK (role IN ('teacher', 'student')),
     must_change_password INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    created_by_teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+    created_by_teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    pending INTEGER NOT NULL DEFAULT 0,
+    placeholder_name INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS sessions (
@@ -112,6 +114,8 @@ function addColumnIfMissing(table: string, column: string, definition: string): 
 
 // Existing accounts keep NULL: nobody is recorded as their creator.
 addColumnIfMissing('users', 'created_by_teacher_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+addColumnIfMissing('users', 'pending', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('users', 'placeholder_name', 'INTEGER NOT NULL DEFAULT 0');
 
 /* Raw row shapes (snake_case, exactly as stored). Booleans are 0/1, JSON columns are strings. */
 
@@ -125,6 +129,13 @@ export interface UserRow {
   created_at: string;
   /** The teacher who created this student account through "Add students" (null otherwise). */
   created_by_teacher_id: number | null;
+  /**
+   * 1 for a student a teacher added by email who has not signed up yet: the password hash is empty (nobody can sign
+   * in), and the first sign-up with this email takes the account over.
+   */
+  pending: number;
+  /** 1 while `name` was made up from the email (the teacher left it blank); sign-up then replaces it. */
+  placeholder_name: number;
 }
 
 export interface SessionRow {

@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { promisify } from 'node:util';
 import type { RequestHandler } from 'express';
 import type { Role, User } from '../../shared/types.js';
 import { get, run, nowIso, type UserRow } from './db.js';
@@ -21,22 +20,9 @@ declare global {
 const SALT_BYTES = 16;
 const HASH_BYTES = 64;
 
-const scryptAsync = promisify(crypto.scrypt) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>;
-
-const formatHash = (salt: Buffer, hash: Buffer) => `scrypt:${salt.toString('hex')}:${hash.toString('hex')}`;
-
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(SALT_BYTES);
-  return formatHash(salt, crypto.scryptSync(password, salt, HASH_BYTES));
-}
-
-/**
- * Same result as hashPassword(), but runs on the libuv thread pool: hashing hundreds of temporary passwords
- * synchronously (bulk "Add students") would block the server for seconds.
- */
-export async function hashPasswordAsync(password: string): Promise<string> {
-  const salt = crypto.randomBytes(SALT_BYTES);
-  return formatHash(salt, await scryptAsync(password, salt, HASH_BYTES));
+  return `scrypt:${salt.toString('hex')}:${crypto.scryptSync(password, salt, HASH_BYTES).toString('hex')}`;
 }
 
 export function verifyPassword(password: string, stored: string): boolean {

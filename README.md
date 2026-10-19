@@ -1,6 +1,6 @@
 # Excel Autograder
 
-A local web app for teaching with spreadsheets. Teachers create classes, add students and post
+A local web app for teaching with spreadsheets. Teachers create classes, add students by email and post
 assignments. Students upload their Excel workbooks, and the app grades them cell by cell against the
 teacher's finished workbook (the answer key). Assignments without an answer key are graded by hand,
 with the student's workbook viewable right in the browser.
@@ -12,12 +12,19 @@ runs on your own computer: no accounts in the cloud, no data leaves the machine.
 
 **For teachers**
 
-- **Classes and rosters.** Create classes, then add students by pasting a list of names and emails.
-  New students get a one-time temporary password; the first time they sign in, the app asks them to
-  choose their own before they can continue. Students can also register themselves and join with the
-  class's 6-character join code. You can reset the password of a student you added, or of a student who
-  is only in your classes (a student who is also in another teacher's class changes it on their Account
-  page), or remove a student from a class; their submissions are kept.
+- **Classes and rosters.** Create classes, then add students by email: paste a list of names and
+  emails, or upload a roster file (CSV, Excel or OpenDocument, such as an export from Google Classroom or
+  your student information system). The app shows what it found in the file before anything is added.
+  Students don't need an account first: when a student signs up with the email you added, the app
+  matches them automatically, and they find their classes, and any work you uploaded for them, right
+  away. Students can also register themselves and join with the class's 6-character join code. You can
+  give a student a temporary password instead (or reset the password of a student you added, or of one
+  who is only in your classes; a student who is also in another teacher's class changes it on their
+  Account page), or remove a student from a class; their submissions are kept. See
+  [Adding students](#adding-students).
+- **Submitting for students.** Upload a workbook on a student's behalf (handed in on a USB stick or by
+  email), even if they haven't signed up yet. It is graded and flagged late like any other submission,
+  and the student sees it as soon as they sign up.
 - **Autograded assignments.** Upload the finished workbook as the answer key, plus an optional starter
   file for students to download. Before saving, a preview shows exactly which cells will be checked.
   Choose what to check (every filled cell, only formula cells, or specific ranges), the numeric
@@ -255,7 +262,7 @@ expected and harmless.
 ## Demo accounts
 
 `npm run seed` (or the installer's `--demo` option) creates these accounts. Every password is `password123`,
-except Finn's.
+except Finn's and Grace's.
 
 | Role | Name | Email | What's there |
 |---|---|---|---|
@@ -265,11 +272,12 @@ except Finn's.
 | Student | Chloe Nguyen | `chloe@demo.test` | Monthly Budget with typed-in totals (formulas required) |
 | Student | Diego Ramirez | `diego@demo.test` | Two Monthly Budget attempts: a weak one on time, a better one a day **late** |
 | Student | Emma Wilson | `emma@demo.test` | Missed the Monthly Budget; finished the warm-up in Spreadsheet Skills |
-| Student | Finn Murphy | `finn@demo.test` | Added by the teacher with a temporary password (printed by `npm run seed`); must choose a new password at first sign-in (the app keeps him on the Account page until he does) |
+| Student | Finn Murphy | `finn@demo.test` | Added by email; the teacher then created a temporary password for him (printed by `npm run seed`). He must choose a new password at first sign-in (the app keeps him on the Account page until he does) |
+| Student | Grace Lee | `grace@demo.test` | Added by email, hasn't signed up yet: create an account with `grace@demo.test` (as a student, any password) and she lands in Business Computing 101 with the Monthly Budget the teacher uploaded for her, already graded |
 
 The demo classes:
 
-- **Business Computing 101** (6 students)
+- **Business Computing 101** (7 students)
   - *Monthly Budget*: autograded with an answer key and starter file, 20 points, due 3 days ago.
   - *Quarterly Sales Report*: graded manually (no answer key), 50 points, due in 5 days.
   - *Grade Calculator*: autograded, 10 points, due in 10 days, no submissions yet.
@@ -277,10 +285,62 @@ The demo classes:
   - *Cell References Warm-up*: autograded (formula cells only, expected answers shown to students).
 
 The seed prints each class's join code. To try joining, register a new student account and enter it.
+To try a roster upload, upload [`samples/class-roster.csv`](samples/class-roster.csv) to a class.
 
 The [`samples/`](samples/) folder has workbooks for trying uploads by hand: answer keys, starter files,
 and student files that score perfectly, have mistakes, or have typed-in totals. Its README lists what
 each one scores.
+
+## Adding students
+
+Add students to a class by email, one at a time, by pasting a list, or by uploading a roster file
+(`.csv`, `.xlsx`, `.xls` or `.ods`): open the class, then **Students** → **Add students** and pick
+**Add one**, **Paste a list** or **Upload a file** (which also offers a blank CSV template). For a file, the
+app reads the first sheet and shows each row before anything is added: who will be invited, who already
+has an account, who is already in the class, and rows it can't use (a missing or invalid email, or a
+teacher's email). Students another teacher already invited but who haven't signed up yet show as invited.
+
+```csv
+First Name,Last Name,Email
+Ada,Lovelace,ada.lovelace@school.edu
+Alan,Turing,alan.turing@school.edu
+,,grace.hopper@school.edu
+```
+
+Accepted columns (headings are matched loosely, ignoring case):
+
+| Column | Headings it recognizes |
+|---|---|
+| Email (required) | Any heading with "email", "e-mail" or "mail" in it: `Email`, `Email Address`, `Student Email`, `Email_Addr`, ... Cells like `Jane Doe <jane@school.edu>` work too. Columns for someone else (`Parent Email`, `Guardian Email`, `Contact Email`, ...) are never used, so parents are not invited as students; a file whose only emails are parents' is refused with an explanation. Without a heading, the column that holds email addresses is used. |
+| Name (optional) | `Name`, `Full Name`, `Student`, `Student Name`, `LastFirst` (PowerSchool); or `First Name` / `Given Name` together with `Last Name` / `Surname` / `Family Name`. Names written `Last, First` become "First Last". |
+
+Other columns, title rows above the headings, and rows without a name or email are ignored, so exports
+from Google Classroom and most student information systems work as they are. A file without a heading
+row works too when one column holds the emails. Repeated emails are listed once, and up to 1,000
+students are read per file. CSVs saved by Excel's plain "CSV" option (not "CSV UTF-8") keep their
+accents and apostrophes ("O’Brien", "Muñoz").
+
+What happens next:
+
+- **A new email** becomes a student who hasn't signed up yet. They appear in the roster, the submissions
+  lists and the gradebook (and its CSV export), and you can upload and grade work for them. Without a
+  name, a stand-in is made from the email (`jane.doe@...` becomes "Jane Doe") and replaced by the name the
+  student signs up with. **Copy sign-up instructions** (on the roster and after adding) gives you a short
+  message to send them: the app itself sends no email.
+- **When the student signs up** with that email (as a student; capitals and extra spaces don't matter),
+  the app matches them to it: they are in your classes immediately, with everything you uploaded for
+  them. Until then, signing in tells them to create their account first. A student who can't sign up can
+  get a temporary password from you instead.
+- **An existing student account** is added to the class right away. Teacher accounts can't be added.
+- **Removing** a student who never signed up and has no submissions deletes them completely, so the email
+  can be added again from scratch. Deleting a class does the same for such students who were only in that
+  class.
+- **Good to know:** the app can't check that an email address belongs to the person signing up with it.
+  Whoever signs up first with an email you added gets that student's place in your classes, the work you
+  uploaded for them and your feedback. Send sign-up instructions to the students' own addresses, and check
+  the roster after they sign up. If the wrong person took an account, **Reset password** on the roster
+  gives you a temporary password to hand to the real student (as long as the student isn't also in
+  another teacher's class).
 
 ## How autograding works
 

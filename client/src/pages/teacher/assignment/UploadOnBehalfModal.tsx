@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Group, Modal, Stack, Text } from '@mantine/core';
-import { IconClockExclamation, IconUpload } from '@tabler/icons-react';
+import { IconClockExclamation, IconMailForward, IconUpload } from '@tabler/icons-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { AssignmentDetail, SubmissionDetail } from '@shared/types';
 import { endpoints } from '../../../api/endpoints';
@@ -9,9 +9,11 @@ import { errorMessage, fieldErrors, notifySuccess } from '../../../utils/errors'
 import { formatScoreOf, isPast } from '../../../utils/format';
 import { invalidateSubmissions } from './cache';
 
-interface StudentRef {
+export interface StudentRef {
   id: number;
   name: string;
+  /** Added by email, not signed up yet (StudentInfo.pending). */
+  pending?: boolean;
 }
 
 function firstName(name: string) {
@@ -69,6 +71,11 @@ export function UploadOnBehalfForm({
         loading={upload.isPending}
         error={error}
       />
+      {student.pending && (
+        <Alert color="grape" variant="light" icon={<IconMailForward />} p="sm">
+          {student.name} hasn't signed up yet — they'll see this work when they create their account.
+        </Alert>
+      )}
       {pastDue && (
         <Alert color="red" variant="light" icon={<IconClockExclamation />} p="sm">
           The due date has passed, so this upload will be flagged as late.

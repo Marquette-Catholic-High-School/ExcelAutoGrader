@@ -5,7 +5,7 @@
 import crypto from 'node:crypto';
 import type { Request } from 'express';
 import type { AddedStudentResult, AddStudentsResponse, ClassSummary, StudentInfo } from '../../../shared/types.js';
-import { generateTempPassword, hashPassword, hashPasswordAsync } from '../auth.js';
+import { generateTempPassword, hashPassword } from '../auth.js';
 import { all, get, nowIso, run, transaction, type ClassRow, type UserRow } from '../db.js';
 import { badRequest, notFound, type HttpError } from '../http.js';
 import { deleteFile } from '../uploads.js';
@@ -16,13 +16,17 @@ import { deleteFile } from '../uploads.js';
 
 export const NAME_MAX_LENGTH = 100;
 export const CLASS_DESCRIPTION_MAX_LENGTH = 2000;
-export const MAX_STUDENTS_PER_REQUEST = 500;
+export const MAX_STUDENTS_PER_REQUEST = 1000;
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Trimmed, lower-cased email ('' for non-strings). */
+/**
+ * Trimmed, lower-cased email ('' for non-strings), in Unicode NFKC form and without invisible format characters, so
+ * an address copied with a zero-width space, in full-width letters or with decomposed accents is the same address as
+ * the one the student types. ASCII addresses are only trimmed and lower-cased.
+ */
 export function normalizeEmail(value: unknown): string {
-  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return typeof value === 'string' ? value.normalize('NFKC').replace(/\p{Cf}/gu, '').trim().toLowerCase() : '';
 }
 
 export function isValidEmail(email: string): boolean {
@@ -145,11 +149,18 @@ const CLASS_FILE_IDS_SQL = `
   UNION
   SELECT s.file_id FROM submissions s JOIN assignments a ON a.id = s.assignment_id WHERE a.class_id = ?`;
 
-/** Deletes the class (rows cascade to enrollments, assignments and submissions), then its stored files. */
+/**
+ * Deletes the class (rows cascade to enrollments, assignments and submissions), then its stored files. Student
+ * accounts are kept, except pending ones left with no class and no submission (see deleteUnusedPendingStudents).
+ */
 export function deleteClassAndFiles(classId: number): void {
   const fileIds = transaction(() => {
     const ids = all<{ id: number }>(CLASS_FILE_IDS_SQL, classId, classId, classId).map((r) => r.id);
+    const studentIds = all<{ id: number }>('SELECT student_id AS id FROM enrollments WHERE class_id = ?', classId).map(
+      (r) => r.id,
+    );
     run('DELETE FROM classes WHERE id = ?', classId);
+    deleteUnusedPendingStudents(studentIds);
     return ids;
   });
   for (const id of fileIds) {
@@ -194,13 +205,14 @@ interface RosterRow {
   name: string;
   email: string;
   must_change_password: number;
+  pending: number;
   joined_at: string;
   can_reset_password: number;
 }
 
 /** Roster rows as the class's own teacher sees them (with canResetPassword), in one query per roster. */
 const ROSTER_SQL = `
-  SELECT u.id, u.name, u.email, u.must_change_password, e.joined_at,
+  SELECT u.id, u.name, u.email, u.must_change_password, u.pending, e.joined_at,
     ${managesPasswordSql('c.teacher_id')} AS can_reset_password
   FROM enrollments e
   JOIN classes c ON c.id = e.class_id
@@ -213,6 +225,7 @@ function toRosterStudent(row: RosterRow): StudentInfo {
     email: row.email,
     joinedAt: row.joined_at,
     mustChangePassword: !!row.must_change_password,
+    pending: !!row.pending,
     canResetPassword: !!row.can_reset_password,
   };
 }
@@ -246,22 +259,78 @@ export function unenroll(classId: number, studentId: number): boolean {
   return run('DELETE FROM enrollments WHERE class_id = ? AND student_id = ?', classId, studentId).changes > 0;
 }
 
-/** New temporary password the student must change at next sign-in; signs them out everywhere. */
+/**
+ * Deletes those of the given accounts that are pending (invited, never signed up) and left with no class and no
+ * submission: nothing would be lost, and the email is free again (also for a teacher sign-up). Run inside the
+ * transaction that removed them from a class.
+ */
+function deleteUnusedPendingStudents(studentIds: number[]): void {
+  if (studentIds.length === 0) return;
+  run(
+    `DELETE FROM users WHERE id IN (SELECT value FROM json_each(?)) AND pending = 1
+       AND NOT EXISTS (SELECT 1 FROM enrollments WHERE student_id = users.id)
+       AND NOT EXISTS (SELECT 1 FROM submissions WHERE student_id = users.id)`,
+    JSON.stringify(studentIds),
+  );
+}
+
+/**
+ * Un-enrolls the student, deleting a pending account left with nothing (deleteUnusedPendingStudents). Returns false
+ * if they were not enrolled.
+ */
+export function removeStudentFromClass(classId: number, studentId: number): boolean {
+  return transaction(() => {
+    if (!unenroll(classId, studentId)) return false;
+    deleteUnusedPendingStudents([studentId]);
+    return true;
+  });
+}
+
+/**
+ * New temporary password the student must change at next sign-in; signs them out everywhere. For a pending student
+ * this creates their first password: the account stops being pending (so it can no longer be claimed by sign-up).
+ */
 export function resetStudentPassword(studentId: number): string {
   const tempPassword = generateTempPassword();
   const hash = hashPassword(tempPassword);
   transaction(() => {
-    run('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?', hash, studentId);
+    run(
+      `UPDATE users SET password_hash = ?, must_change_password = 1, pending = 0, placeholder_name = 0
+       WHERE id = ?`,
+      hash,
+      studentId,
+    );
     run('DELETE FROM sessions WHERE user_id = ?', studentId);
   });
   return tempPassword;
 }
 
-/* Bulk add */
+/* Bulk add (invite by email) */
 
-interface Credentials {
-  tempPassword: string;
-  hash: string;
+export const TEACHER_EMAIL_PROBLEM = 'This email belongs to a teacher account.';
+
+/** Why a roster row can never be added, whatever is in the database (undefined when it looks fine). */
+export function rosterRowProblem(name: string, email: string): string | undefined {
+  if (!email) return 'Email is required.';
+  if (!isValidEmail(email)) return 'Not a valid email address.';
+  if (name.length > NAME_MAX_LENGTH) return `Name must be at most ${NAME_MAX_LENGTH} characters.`;
+  return undefined;
+}
+
+/**
+ * A stand-in name for a student the teacher added by email only, from the part before the "@":
+ * "jane.doe@..." → "Jane Doe", "mary_o'neil-smith2027@..." → "Mary O'neil Smith", "jdoe+math@..." → "Jdoe".
+ * Dots, underscores, dashes, digits and other non-letters separate words. Falls back to the local part as is
+ * (e.g. "20231234") when it has no letters.
+ */
+export function placeholderName(email: string): string {
+  const local = email.split('@')[0].split('+')[0];
+  const words = local
+    .split(/[^\p{L}\p{M}']+/u)
+    .map((word) => word.replace(/^'+|'+$/g, ''))
+    .filter((word) => /\p{L}/u.test(word));
+  const name = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+  return (name || local || email).slice(0, NAME_MAX_LENGTH);
 }
 
 interface RosterEntry {
@@ -269,21 +338,9 @@ interface RosterEntry {
   email: string;
   /** Set when the row cannot be added no matter what is in the database. */
   problem?: string;
-  /** Pre-computed for rows that had no account when the request started. */
-  credentials?: Credentials;
 }
 
 type RosterError = AddStudentsResponse['errors'][number];
-
-async function newCredentials(): Promise<Credentials> {
-  const tempPassword = generateTempPassword();
-  return { tempPassword, hash: await hashPasswordAsync(tempPassword) };
-}
-
-function syncCredentials(): Credentials {
-  const tempPassword = generateTempPassword();
-  return { tempPassword, hash: hashPassword(tempPassword) };
-}
 
 /** Normalizes rows, drops blank ones, merges duplicate emails into their first row and flags invalid rows. */
 function parseRoster(rows: unknown[]): RosterEntry[] {
@@ -295,10 +352,7 @@ function parseRoster(rows: unknown[]): RosterEntry[] {
     const email = normalizeEmail(row.email);
     if (!name && !email) continue;
 
-    let problem: string | undefined;
-    if (!email) problem = 'Email is required.';
-    else if (!isValidEmail(email)) problem = 'Not a valid email address.';
-    else if (name.length > NAME_MAX_LENGTH) problem = `Name must be at most ${NAME_MAX_LENGTH} characters.`;
+    const problem = rosterRowProblem(name, email);
     if (problem) {
       entries.push({ name, email, problem });
       continue;
@@ -316,60 +370,52 @@ function parseRoster(rows: unknown[]): RosterEntry[] {
   return entries;
 }
 
-/**
- * Runs inside the transaction. Returns the result, or an error message for the row. New accounts record the
- * class's teacher as their creator, which lets that teacher reset the password later (canManageStudentPassword).
- */
-function addEntry(cls: ClassRow, entry: RosterEntry): AddedStudentResult | string {
-  let user = findUserByEmail(entry.email);
-  if (user?.role === 'teacher') return 'This email belongs to a teacher account.';
-
-  let tempPassword: string | undefined;
-  if (!user) {
-    if (!entry.name) return 'Enter a name to create a new student account.';
-    // credentials are only missing if an account for this email disappeared since the request started.
-    const credentials = entry.credentials ?? syncCredentials();
-    tempPassword = credentials.tempPassword;
-    const { lastInsertRowid } = run(
-      `INSERT INTO users (email, name, password_hash, role, must_change_password, created_at, created_by_teacher_id)
-       VALUES (?, ?, ?, 'student', 1, ?, ?)`,
-      entry.email,
-      entry.name,
-      credentials.hash,
-      nowIso(),
-      cls.teacher_id,
-    );
-    user = get<UserRow>('SELECT * FROM users WHERE id = ?', lastInsertRowid)!;
-  }
-
-  const newlyEnrolled = enroll(cls.id, user.id);
-  return {
-    student: enrolledStudent(cls.id, user.id)!,
-    created: tempPassword !== undefined,
-    ...(tempPassword !== undefined ? { tempPassword } : {}),
-    alreadyEnrolled: !newlyEnrolled,
-  };
+/** Creates the pending account of an invited student (no password: see UserRow.pending). */
+function createPendingStudent(cls: ClassRow, entry: RosterEntry): UserRow {
+  const { lastInsertRowid } = run(
+    `INSERT INTO users (email, name, password_hash, role, must_change_password, created_at, created_by_teacher_id,
+       pending, placeholder_name)
+     VALUES (?, ?, '', 'student', 0, ?, ?, 1, ?)`,
+    entry.email,
+    entry.name || placeholderName(entry.email),
+    nowIso(),
+    cls.teacher_id,
+    entry.name ? 0 : 1,
+  );
+  return get<UserRow>('SELECT * FROM users WHERE id = ?', lastInsertRowid)!;
 }
 
 /**
- * Creates accounts for new emails (temporary password, must change it at first sign-in, created by the class's
- * teacher), enrolls existing student accounts, and reports invalid rows and teacher emails in `errors`.
- * All-or-nothing. Both lists keep the order of the request.
+ * Runs inside the transaction. Returns the result, or an error message for the row. New accounts record the
+ * class's teacher as their creator, which lets that teacher create a password for them later
+ * (canManageStudentPassword). When the teacher who created a pending account adds it again with a name while it
+ * still has a made-up one, the name replaces it; other teachers never rename an account.
  */
-export async function addStudents(classId: number, rows: unknown[]): Promise<AddStudentsResponse> {
+function addEntry(cls: ClassRow, entry: RosterEntry): AddedStudentResult | string {
+  let user = findUserByEmail(entry.email);
+  if (user?.role === 'teacher') return TEACHER_EMAIL_PROBLEM;
+
+  const created = !user;
+  if (!user) user = createPendingStudent(cls, entry);
+  else if (user.pending && user.placeholder_name && entry.name && user.created_by_teacher_id === cls.teacher_id) {
+    run('UPDATE users SET name = ?, placeholder_name = 0 WHERE id = ?', entry.name, user.id);
+  }
+
+  const newlyEnrolled = enroll(cls.id, user.id);
+  const student = enrolledStudent(cls.id, user.id)!;
+  return { student, created, pending: student.pending, alreadyEnrolled: !newlyEnrolled };
+}
+
+/**
+ * Invites students by email (docs/API.md, "Add students"): new emails get a pending account (created by the class's
+ * teacher, matched when the student signs up), existing student accounts are enrolled, and invalid rows and teacher
+ * emails are reported in `errors`. All-or-nothing. Both lists keep the order of the request.
+ */
+export function addStudents(classId: number, rows: unknown[]): AddStudentsResponse {
   const entries = parseRoster(rows);
   if (entries.length === 0) {
     throw badRequest('Add at least one student with an email address.', { students: 'Add at least one student.' });
   }
-
-  // Hash outside the transaction (it has to be synchronous). addEntry re-checks every email inside it.
-  await Promise.all(
-    entries
-      .filter((entry) => !entry.problem && entry.name && !findUserByEmail(entry.email))
-      .map(async (entry) => {
-        entry.credentials = await newCredentials();
-      }),
-  );
 
   return transaction(() => {
     const cls = get<ClassRow>('SELECT * FROM classes WHERE id = ?', classId);

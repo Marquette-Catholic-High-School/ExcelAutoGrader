@@ -1,12 +1,15 @@
 import type { ErrorRequestHandler } from 'express';
 import multer from 'multer';
+import type { ApiError } from '../../shared/types.js';
 
-/** Throw from any route handler; the error middleware turns it into `{ error, fields? }` JSON. */
+/** Throw from any route handler; the error middleware turns it into `{ error, code?, fields? }` JSON (ApiError). */
 export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
     public fields?: Record<string, string>,
+    /** Machine-readable reason for clients that react to a specific error (ApiError.code). */
+    public code?: ApiError['code'],
   ) {
     super(message);
   }
@@ -49,7 +52,12 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
     return;
   }
   if (err instanceof HttpError) {
-    res.status(err.status).json({ error: err.message, ...(err.fields ? { fields: err.fields } : {}) });
+    const body: ApiError = {
+      error: err.message,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.fields ? { fields: err.fields } : {}),
+    };
+    res.status(err.status).json(body);
     return;
   }
   if (err instanceof multer.MulterError) {

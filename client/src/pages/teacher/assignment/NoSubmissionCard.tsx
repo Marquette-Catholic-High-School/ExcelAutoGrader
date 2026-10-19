@@ -2,7 +2,7 @@ import { Box, Card, EmptyState, Text } from '@mantine/core';
 import { IconFileOff } from '@tabler/icons-react';
 import type { AssignmentDetail } from '@shared/types';
 import { formatDateTime, isPast } from '../../../utils/format';
-import { UploadOnBehalfForm } from './UploadOnBehalfModal';
+import { UploadOnBehalfForm, type StudentRef } from './UploadOnBehalfModal';
 
 /** Grading workspace empty state: nothing submitted yet, with an upload-on-behalf dropzone. */
 export function NoSubmissionCard({
@@ -10,7 +10,7 @@ export function NoSubmissionCard({
   student,
 }: {
   assignment: AssignmentDetail;
-  student: { id: number; name: string };
+  student: StudentRef;
 }) {
   const pastDue = isPast(assignment.dueAt);
   return (
@@ -19,7 +19,11 @@ export function NoSubmissionCard({
         icon={<IconFileOff size={28} />}
         withIndicatorBackground
         title="No submission yet"
-        description={`${student.name} hasn't uploaded a workbook for this assignment.`}
+        description={
+          student.pending
+            ? `${student.name} hasn't signed up yet, so nothing has been submitted. You can upload their work below.`
+            : `${student.name} hasn't uploaded a workbook for this assignment.`
+        }
       >
         {pastDue ? (
           <Text c="red" fw={700} size="sm" ta="center">

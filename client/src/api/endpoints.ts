@@ -25,6 +25,7 @@ import type {
   RegisterRequest,
   RegradeResponse,
   ResetPasswordResponse,
+  RosterPreview,
   StudentInfo,
   SubmissionDetail,
   UpdateClassRequest,
@@ -93,6 +94,12 @@ export const endpoints = {
   listStudents: (classId: number) => api.get<StudentInfo[]>(`/api/classes/${classId}/students`),
   addStudents: (classId: number, body: AddStudentsRequest) =>
     api.post<AddStudentsResponse>(`/api/classes/${classId}/students`, body),
+  /** Reads an uploaded roster (CSV/Excel) and reports what adding each row would do; nothing is saved. */
+  importRosterPreview: (classId: number, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.upload<RosterPreview>(`/api/classes/${classId}/students/import-preview`, fd);
+  },
   removeStudent: (classId: number, studentId: number) =>
     api.delete<OkResponse>(`/api/classes/${classId}/students/${studentId}`),
   resetStudentPassword: (classId: number, studentId: number) =>

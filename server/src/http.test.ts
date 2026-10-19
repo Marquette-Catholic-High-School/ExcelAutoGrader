@@ -202,6 +202,17 @@ describe('errorHandler', () => {
     });
   });
 
+  test('HttpErrors with a code send it (ApiError.code)', () => {
+    assert.deepEqual(handle(new http.HttpError(401, 'Sign up first.', { email: 'Sign up first.' }, 'needs_signup')), {
+      status: 401,
+      body: { error: 'Sign up first.', code: 'needs_signup', fields: { email: 'Sign up first.' } },
+    });
+    assert.deepEqual(handle(new http.HttpError(401, 'No.', undefined, 'needs_signup')), {
+      status: 401,
+      body: { error: 'No.', code: 'needs_signup' },
+    });
+  });
+
   test('unexpected errors (and 5xx statuses) are 500 and logged', () => {
     for (const err of [new Error('boom'), Object.assign(new Error('upstream'), { status: 502 }), 'a string']) {
       assert.deepEqual(handle(err), { status: 500, body: { error: 'Something went wrong on the server.' } });

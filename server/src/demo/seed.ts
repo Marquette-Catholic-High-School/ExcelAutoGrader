@@ -29,7 +29,7 @@ import {
   type MonthlyBudgetVariant,
 } from '../grader/fixtures.js';
 import { normalizeGradingConfig, previewKey } from '../grader/index.js';
-import { addStudents, createClass, enroll } from '../services/classes.js';
+import { addStudents, createClass, enroll, resetStudentPassword } from '../services/classes.js';
 import { autoGrade } from '../services/grading.js';
 import { filePath } from '../uploads.js';
 import {
@@ -218,12 +218,15 @@ interface SubmissionSpec {
   bytes: Buffer;
   fileName: string;
   submittedAt: Date;
+  /** A teacher uploading on the student's behalf (default: the student). */
+  uploadedBy?: UserRow;
 }
 
 /** A new attempt, autograded with the real grader when the assignment is autograded. */
 function submit(spec: SubmissionSpec): SubmissionRow {
   const { assignment, student } = spec;
-  const file = storeFile(spec.bytes, spec.fileName, student, spec.submittedAt);
+  const uploader = spec.uploadedBy ?? student;
+  const file = storeFile(spec.bytes, spec.fileName, uploader, spec.submittedAt);
   const result = autoGrade(assignment, filePath(file));
   if (assignment.grading_mode === 'auto' && result.auto_status !== 'graded') {
     throw new Error(`Autograding ${student.name}'s "${spec.fileName}" failed: ${result.auto_error}`);
@@ -242,7 +245,7 @@ function submit(spec: SubmissionSpec): SubmissionRow {
     file.id,
     next,
     iso(spec.submittedAt),
-    student.id,
+    uploader.id,
     result.auto_status,
     result.auto_score,
     result.auto_report,
@@ -251,7 +254,8 @@ function submit(spec: SubmissionSpec): SubmissionRow {
   const row = get<SubmissionRow>('SELECT * FROM submissions WHERE id = ?', lastInsertRowid)!;
   const score = row.auto_score === null ? 'waiting for the teacher' : `${row.auto_score} / ${assignment.points}`;
   const timing = relativeTo(assignment.due_at, row.submitted_at);
-  log(`    ${student.name.padEnd(15)} attempt ${row.attempt}  ${timing.padEnd(16)} ${score}`);
+  const by = uploader === student ? '' : `  (uploaded by ${uploader.name})`;
+  log(`    ${student.name.padEnd(15)} attempt ${row.attempt}  ${timing.padEnd(16)} ${score}${by}`);
   return row;
 }
 
@@ -313,11 +317,22 @@ export async function seedDemoData(options: { quiet?: boolean } = {}): Promise<S
     onDay(-28, 8),
   );
   enrollAt(bc101.id, [ava, ben, chloe, diego, emma], onDay(-27, 12));
-  // Finn is added the way a teacher adds a student in the app: a new account with a temporary password.
-  const { added } = await addStudents(bc101.id, [{ name: 'Finn Murphy', email: 'finn@demo.test' }]);
-  const finnPassword = added[0]?.tempPassword;
-  if (!finnPassword) throw new Error('Finn should have been created with a temporary password.');
-  log(`  Join code ${bc101.joinCode}; students: Ava, Ben, Chloe, Diego, Emma, and Finn (added by the teacher)`);
+  // Finn and Grace are added the way a teacher adds students in the app: by email, which makes accounts that wait
+  // for the student to sign up. The teacher then created a temporary password for Finn; Grace hasn't signed up yet.
+  const { added } = addStudents(bc101.id, [
+    { name: 'Finn Murphy', email: 'finn@demo.test' },
+    { name: 'Grace Lee', email: 'grace@demo.test' },
+  ]);
+  const [finn, grace] = ['finn@demo.test', 'grace@demo.test'].map((email) => {
+    const id = added.find((a) => a.student.email === email && a.created && a.pending)?.student.id;
+    if (!id) throw new Error(`${email} should have been added as a new student who hasn't signed up.`);
+    return get<UserRow>('SELECT * FROM users WHERE id = ?', id)!;
+  });
+  const addedAt = onDay(-20, 9);
+  for (const student of [finn, grace]) run('UPDATE users SET created_at = ? WHERE id = ?', iso(addedAt), student.id);
+  enrollAt(bc101.id, [finn, grace], addedAt);
+  const finnPassword = resetStudentPassword(finn.id);
+  log(`  Join code ${bc101.joinCode}; students: Ava, Ben, Chloe, Diego, Emma, and Finn and Grace (added by email)`);
 
   const budgetDue = onDay(-3, 23, 59);
   const budget = createAssignment({
@@ -340,6 +355,15 @@ export async function seedDemoData(options: { quiet?: boolean } = {}): Promise<S
   // Diego's first, unfinished attempt was on time; the much better second one came in a day late.
   budgetAttempt(diego, 'incomplete', -5 * HOUR);
   budgetAttempt(diego, 'mostly', DAY + 2 * HOUR + 14 * MINUTE);
+  // Grace handed in her workbook on a USB stick before the deadline; the teacher uploaded it for her.
+  submit({
+    assignment: budget,
+    student: grace,
+    bytes: monthlyBudgetSubmission('mostly'),
+    fileName: 'Monthly Budget - Grace Lee.xlsx',
+    submittedAt: shift(budgetDue, -DAY - 3 * HOUR),
+    uploadedBy: teacher,
+  });
   teacherGrade(
     benBudget,
     teacher,
@@ -349,7 +373,7 @@ export async function seedDemoData(options: { quiet?: boolean } = {}): Promise<S
       'Income ($C$7). The budgeted Net in B18 is still empty.',
     shift(budgetDue, DAY + 9 * HOUR),
   );
-  log('    Emma and Finn have not submitted (missing). Ben has teacher feedback.');
+  log("    Emma and Finn have not submitted (missing). Ben has teacher feedback. Grace's work was uploaded for her.");
 
   const salesDue = onDay(5, 23, 59);
   const sales = createAssignment({
@@ -441,11 +465,18 @@ export async function seedDemoData(options: { quiet?: boolean } = {}): Promise<S
       { name: teacher.name, email: teacher.email, role: 'teacher', password: DEMO_PASSWORD, note: 'Owns both classes' },
       ...students,
       {
-        name: 'Finn Murphy',
-        email: 'finn@demo.test',
+        name: finn.name,
+        email: finn.email,
         role: 'student',
         password: finnPassword,
         note: 'Temporary password; must choose a new one at sign-in',
+      },
+      {
+        name: grace.name,
+        email: grace.email,
+        role: 'student',
+        password: '(none yet)',
+        note: 'Added by email, has not signed up: choose "Create an account" with this email',
       },
     ],
     joinCodes: [bc101, skills].map(({ name, joinCode }) => ({ name, joinCode })),
@@ -456,8 +487,22 @@ export async function seedDemoData(options: { quiet?: boolean } = {}): Promise<S
 /* Sample files for trying uploads by hand                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A class roster for trying a roster upload. In Business Computing 101, Ava is already in the class, the others are
+ * new (Leo has no name, so the app makes one from his email). @demo.test emails count as demo accounts for the seed.
+ */
+export const CLASS_ROSTER_CSV = [
+  'First Name,Last Name,Email',
+  'Hana,Kim,hana.kim@demo.test',
+  'Isaac,Okafor,isaac.okafor@demo.test',
+  'Julia,Rossi,julia.rossi@demo.test',
+  ',,leo.martin@demo.test',
+  'Ava,Thompson,ava@demo.test',
+  '',
+].join('\n');
+
 export function writeSamples(): void {
-  step(`Writing sample workbooks to ${SAMPLES_DIR}`);
+  step(`Writing sample files to ${SAMPLES_DIR}`);
   const files: [string, Buffer][] = [
     ['monthly-budget-KEY.xlsx', monthlyBudgetKey()],
     ['monthly-budget-starter.xlsx', monthlyBudgetTemplate()],
@@ -469,6 +514,7 @@ export function writeSamples(): void {
     ['grade-calculator-starter.xlsx', gradeCalculatorTemplate()],
     ['grade-calculator-student.xlsx', gradeCalculatorSubmission()],
     ['sales-report-student.xlsx', salesReportWorkbook('polished', 'Sample Student')],
+    ['class-roster.csv', Buffer.from(CLASS_ROSTER_CSV, 'utf8')],
   ];
   fs.mkdirSync(SAMPLES_DIR, { recursive: true });
   for (const [name, bytes] of files) fs.writeFileSync(path.join(SAMPLES_DIR, name), bytes);

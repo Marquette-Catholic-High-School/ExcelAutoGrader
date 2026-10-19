@@ -29,7 +29,8 @@ interface AuthState {
    */
   signedOut: boolean;
   login: (body: LoginRequest) => Promise<User>;
-  register: (body: RegisterRequest) => Promise<User>;
+  /** `claimedClasses`: classes a teacher had already added this email to (empty for an ordinary sign-up). */
+  register: (body: RegisterRequest) => Promise<{ user: User; claimedClasses: string[] }>;
   logout: () => Promise<void>;
   /** Replace the cached user (e.g. after changing password). */
   setUser: (user: User) => void;
@@ -126,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(res.token);
     setSignedOut(false);
     setUserState(res.user);
-    return res.user;
+    return { user: res.user, claimedClasses: res.claimedClasses ?? [] };
   }, [queryClient]);
 
   const logout = useCallback(async () => {

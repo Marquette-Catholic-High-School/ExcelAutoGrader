@@ -1,14 +1,15 @@
 /**
  * Parses a pasted roster into { name, email } rows. Accepted line shapes:
  *   Jane Doe, jane@school.edu          (comma or semicolon separated)
- *   jane@school.edu                    (name derived from the email: "Jane")
+ *   jane@school.edu                    (no name: the student's own name replaces it when they sign up)
  *   Jane<TAB>Doe<TAB>jane@school.edu   (rows copied from Excel / Google Sheets; extra columns are joined)
  *   Jane Doe <jane@school.edu>         (copied from an email client)
  *   a@school.edu, b@school.edu         (several addresses on one line become several students)
  * A first line without an email that looks like a header ("Name, Email") is skipped silently.
  */
 
-export const MAX_STUDENTS_PER_REQUEST = 500;
+/** Mirrors the server's limit for POST /api/classes/:classId/students. */
+export const MAX_STUDENTS_PER_REQUEST = 1000;
 const NAME_MAX = 100;
 
 const EMAIL_FIND = /[^\s@<>()[\]{},;:"']+@[^\s@<>()[\]{},;:"']+\.[^\s@<>()[\]{},;:"']+/;
@@ -20,7 +21,10 @@ export interface ParsedStudent {
   line: number;
   name: string;
   email: string;
-  /** True when no name was given and it was derived from the email address. */
+  /**
+   * True when no name was given: `name` is derived from the email for display, and the row is sent with a blank
+   * name so the server stores a placeholder that the student's own name replaces when they sign up.
+   */
   derivedName: boolean;
 }
 
@@ -35,14 +39,26 @@ export interface ParseResult {
   issues: ParseIssue[];
 }
 
-/** "jane.doe+math@school.edu" → "Jane Doe" */
+/**
+ * "jane.doe+math@school.edu" → "Jane Doe". Mirrors the server's placeholder name for a student added without a
+ * name (server/src/services/classes.ts placeholderName), so previews show the name the roster will show.
+ */
 export function nameFromEmail(email: string): string {
   const local = email.split('@')[0].split('+')[0];
   const words = local
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1));
-  return words.join(' ') || local;
+    .split(/[^\p{L}\p{M}']+/u)
+    .map((word) => word.replace(/^'+|'+$/g, ''))
+    .filter((word) => /\p{L}/u.test(word));
+  const name = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+  return (name || local || email).slice(0, NAME_MAX);
+}
+
+/**
+ * Same normalization as the server (server/src/services/classes.ts normalizeEmail), so an address copied with a
+ * zero-width space or in full-width letters is listed (and de-duplicated) as the address the student will type.
+ */
+function normalizeEmail(email: string): string {
+  return email.normalize('NFKC').replace(/\p{Cf}/gu, '').trim().toLowerCase();
 }
 
 function splitCells(line: string): string[] {
@@ -75,7 +91,7 @@ function lineCandidates(line: string): Candidate[] {
   const withEmail = cells.filter((c) => EMAIL_FIND.test(c));
   if (withEmail.length === 0) return [];
 
-  const emailOf = (cell: string) => (EMAIL_FIND.exec(cell)?.[0] ?? '').replace(/\.+$/, '').toLowerCase();
+  const emailOf = (cell: string) => normalizeEmail((EMAIL_FIND.exec(cell)?.[0] ?? '').replace(/\.+$/, ''));
   const restOf = (cell: string) => cleanName(cell.replace(EMAIL_FIND, ' '));
 
   if (withEmail.length > 1) {

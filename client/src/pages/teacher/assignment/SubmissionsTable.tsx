@@ -30,7 +30,7 @@ import {
 import { Link } from 'react-router';
 import type { AssignmentDetail, StudentInfo, SubmissionRow } from '@shared/types';
 import { endpoints } from '../../../api/endpoints';
-import { LateBadge, TeacherStatusBadge } from '../../../components/StatusBadges';
+import { LateBadge, PendingBadge, TeacherStatusBadge } from '../../../components/StatusBadges';
 import { notifyError } from '../../../utils/errors';
 import { formatDateTime, formatScore, fromNow, isPast, percent, scoreTextColor } from '../../../utils/format';
 import classes from './assignment.module.css';
@@ -316,9 +316,12 @@ export function SubmissionsTable({
                     <Group gap="sm" wrap="nowrap">
                       <Avatar name={row.student.name} color="initials" size={32} radius="xl" />
                       <Stack gap={0} style={{ minWidth: 0 }}>
-                        <Text size="sm" fw={600} truncate="end">
-                          {row.student.name}
-                        </Text>
+                        <Group gap={6} wrap="nowrap">
+                          <Text size="sm" fw={600} truncate="end" style={{ minWidth: 0 }}>
+                            {row.student.name}
+                          </Text>
+                          <PendingBadge pending={row.student.pending} size="xs" />
+                        </Group>
                         <Text size="xs" c="dimmed" truncate="end">
                           {row.student.email}
                         </Text>

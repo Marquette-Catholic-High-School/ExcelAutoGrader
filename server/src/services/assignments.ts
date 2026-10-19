@@ -39,10 +39,14 @@ export function userAssignments(user: UserRow): AssignmentWithClass[] {
   );
 }
 
-/** Enrolled students of a class, sorted by name. */
+type RosterUserRow = Pick<UserRow, 'id' | 'name' | 'email' | 'must_change_password' | 'pending'> & {
+  joined_at: string;
+};
+
+/** Enrolled students of a class (pending, not yet signed-up ones included), sorted by name. */
 export function classRoster(classId: number): StudentInfo[] {
-  const rows = all<Pick<UserRow, 'id' | 'name' | 'email' | 'must_change_password'> & { joined_at: string }>(
-    `SELECT u.id, u.name, u.email, u.must_change_password, e.joined_at
+  const rows = all<RosterUserRow>(
+    `SELECT u.id, u.name, u.email, u.must_change_password, u.pending, e.joined_at
      FROM enrollments e JOIN users u ON u.id = e.student_id
      WHERE e.class_id = ? ORDER BY u.name COLLATE NOCASE ASC, u.id ASC`,
     classId,
@@ -53,6 +57,7 @@ export function classRoster(classId: number): StudentInfo[] {
     email: r.email,
     joinedAt: r.joined_at,
     mustChangePassword: !!r.must_change_password,
+    pending: !!r.pending,
   }));
 }
 

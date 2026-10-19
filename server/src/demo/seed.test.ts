@@ -8,9 +8,10 @@ import type {
   AssignmentSummary,
   AuthResponse,
   ClassSummary,
+  RosterPreview,
   SubmissionDetail,
 } from '../../../shared/types.js';
-import { startTestServer, type TestServer } from '../test-utils.js';
+import { fileBlob, startTestServer, type TestServer } from '../test-utils.js';
 
 let srv: TestServer;
 let seed: typeof import('./seed.js');
@@ -46,7 +47,7 @@ describe('demo seed', () => {
     assert.deepEqual(
       classes.map((c) => [c.name, c.studentCount, c.assignmentCount]),
       [
-        ['Business Computing 101', 6, 3],
+        ['Business Computing 101', 7, 3],
         ['Spreadsheet Skills', 2, 1],
       ],
     );
@@ -67,7 +68,7 @@ describe('demo seed', () => {
     const token = await login('teacher@demo.test');
     const [budget] = await getJson<AssignmentSummary[]>(token, '/api/me/assignments');
     // Diego's late work is autograded, so it no longer needs the teacher's attention.
-    assert.deepEqual(budget.counts, { students: 6, submitted: 4, late: 1, needsGrading: 0, lateUngraded: 0 });
+    assert.deepEqual(budget.counts, { students: 7, submitted: 5, late: 1, needsGrading: 0, lateUngraded: 0 });
     const { rows } = await getJson<AssignmentSubmissionsResponse>(token, `/api/assignments/${budget.id}/submissions`);
     const summary = rows.map((r) => {
       const { student, status, attemptCount, latest } = r;
@@ -80,7 +81,13 @@ describe('demo seed', () => {
       ['Diego Ramirez', 'autograded', 2, 18.26, true],
       ['Emma Wilson', 'missing', 0, null, false],
       ['Finn Murphy', 'missing', 0, null, false],
+      ['Grace Lee', 'autograded', 1, 18.26, false],
     ]);
+    assert.deepEqual(
+      rows.map((r) => r.student.pending),
+      [false, false, false, false, false, false, true],
+    );
+    assert.equal(rows.find((r) => r.student.name === 'Grace Lee')!.latest!.submittedByName, 'Ms. Rivera');
     const chloe = rows.find((r) => r.student.name === 'Chloe Nguyen')!.latest!;
     const reasons = chloe.report!.sheets.flatMap((s) => s.cells).filter((c) => !c.correct).map((c) => c.reason);
     assert.equal(reasons.length, 9);
@@ -107,7 +114,7 @@ describe('demo seed', () => {
     const sales = (await getJson<AssignmentSummary[]>(token, '/api/me/assignments')).find(
       (a) => a.title === 'Quarterly Sales Report',
     )!;
-    assert.deepEqual(sales.counts, { students: 6, submitted: 2, late: 0, needsGrading: 1, lateUngraded: 0 });
+    assert.deepEqual(sales.counts, { students: 7, submitted: 2, late: 0, needsGrading: 1, lateUngraded: 0 });
     const { rows } = await getJson<AssignmentSubmissionsResponse>(token, `/api/assignments/${sales.id}/submissions`);
     const ava = rows.find((r) => r.student.name === 'Ava Thompson')!;
     const ben = rows.find((r) => r.student.name === 'Ben Carter')!;
@@ -148,6 +155,53 @@ describe('demo seed', () => {
     });
     assert.equal(res.status, 200);
     assert.equal(res.body.user.mustChangePassword, true);
+  });
+
+  test('samples/class-roster.csv previews against Business Computing 101', async () => {
+    const file = fs.readFileSync(path.join(seed.SAMPLES_DIR, 'class-roster.csv'));
+    assert.equal(file.toString('utf8'), seed.CLASS_ROSTER_CSV, 'the committed file matches what writeSamples() writes');
+    const token = await login('teacher@demo.test');
+    const [bc101] = await getJson<ClassSummary[]>(token, '/api/classes');
+    const form = new FormData();
+    form.append('file', fileBlob(file), 'class-roster.csv');
+    const res = await srv.request<RosterPreview>('POST', `/api/classes/${bc101.id}/students/import-preview`, {
+      token,
+      form,
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body.columns, { email: 'Email', name: 'First Name + Last Name' });
+    assert.deepEqual(
+      res.body.rows.map((r) => [r.name, r.status]),
+      [
+        ['Hana Kim', 'invite'],
+        ['Isaac Okafor', 'invite'],
+        ['Julia Rossi', 'invite'],
+        ['', 'invite'],
+        ['Ava Thompson', 'already'],
+      ],
+    );
+  });
+
+  test('Grace signs up with her email and finds her class and the work the teacher uploaded', async () => {
+    const before = await srv.request('POST', '/api/auth/login', {
+      json: { email: 'grace@demo.test', password: 'password123' },
+    });
+    assert.equal(before.status, 401);
+    assert.equal(before.body.code, 'needs_signup');
+
+    const res = await srv.request<AuthResponse>('POST', '/api/auth/register', {
+      json: { name: 'Grace Lee', email: 'grace@demo.test', password: 'grace-password', role: 'student' },
+    });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.deepEqual(res.body.claimedClasses, ['Business Computing 101']);
+    assert.equal(res.body.user.mustChangePassword, false);
+
+    const [budget] = await getJson<AssignmentSummary[]>(res.body.token, '/api/me/assignments');
+    assert.equal(budget.title, 'Monthly Budget');
+    assert.deepEqual([budget.mine!.status, budget.mine!.late, budget.mine!.finalScore], ['graded', false, 18.26]);
+    const [work] = await getJson<SubmissionDetail[]>(res.body.token, `/api/assignments/${budget.id}/my-submissions`);
+    assert.equal(work.submittedByName, 'Ms. Rivera');
+    assert.equal(work.file.name, 'Monthly Budget - Grace Lee.xlsx');
   });
 
   test('seeding again starts over without leaving old uploads behind', async () => {

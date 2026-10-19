@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Alert, Anchor, Button, PasswordInput, SegmentedControl, Stack, Text, TextInput } from '@mantine/core';
 import { hasLength, isEmail, useForm } from '@mantine/form';
+import { notifications } from '@mantine/notifications';
 import { IconAlertCircle, IconUserPlus } from '@tabler/icons-react';
-import { Link } from 'react-router';
+import { Link, useLocation, useSearchParams } from 'react-router';
 import type { Role } from '@shared/types';
 import { useAuth } from '../../auth/AuthContext';
 import { errorMessage, fieldErrors } from '../../utils/errors';
@@ -26,13 +27,43 @@ const ROLE_HINT: Record<Role, string> = {
   student: "Join your teacher's class with a 6-character code and get instant feedback on your workbooks.",
 };
 
+/** Router state for links to /register, such as the login page's "Create your account" (kept out of the URL). */
+export interface RegisterPrefill {
+  email?: string;
+}
+
+function isRole(value: string | null): value is Role {
+  return value === 'teacher' || value === 'student';
+}
+
+/** Welcome for a student whose teacher had already added their email to classes. */
+function notifyClaimedClasses(name: string, classNames: string[]) {
+  const firstName = name.split(/\s+/)[0] || name;
+  const list = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(classNames);
+  notifications.show({
+    color: 'teal',
+    title: `Welcome, ${firstName}!`,
+    message: `You're already in ${list}. Your classes and assignments are ready.`,
+    autoClose: 10_000,
+  });
+}
+
 export function RegisterPage() {
   const { register } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  // Prefilled from links such as the login page's "Create your account" (?role=student, email in router state).
+  const [params] = useSearchParams();
+  const roleParam = params.get('role');
+  const prefill = (useLocation().state ?? {}) as RegisterPrefill;
   usePageTitle('Create an account');
 
   const form = useForm<RegisterValues>({
-    initialValues: { role: 'teacher', name: '', email: '', password: '' },
+    initialValues: {
+      role: isRole(roleParam) ? roleParam : 'teacher',
+      name: '',
+      email: typeof prefill.email === 'string' ? prefill.email.trim() : '',
+      password: '',
+    },
     validate: {
       name: (value) => {
         const name = value.trim();
@@ -48,7 +79,12 @@ export function RegisterPage() {
     setError(null);
     try {
       // The guest-only route guard sees the new user and redirects to their dashboard.
-      await register({ ...values, name: values.name.trim(), email: values.email.trim() });
+      const { user, claimedClasses } = await register({
+        ...values,
+        name: values.name.trim(),
+        email: values.email.trim(),
+      });
+      if (claimedClasses.length > 0) notifyClaimedClasses(user.name, claimedClasses);
     } catch (err) {
       const fields = fieldErrors(err);
       if (Object.keys(fields).length > 0) form.setErrors(fields);
@@ -70,7 +106,7 @@ export function RegisterPage() {
               Sign in
             </Anchor>
           </Text>
-          <TeacherCreatedAccountNote />
+          <TeacherCreatedAccountNote page="register" />
         </Stack>
       }
     >
@@ -93,6 +129,11 @@ export function RegisterPage() {
             <Text size="xs" c="dimmed" ta="center" aria-live="polite">
               {ROLE_HINT[role]}
             </Text>
+            {role === 'student' && (
+              <Text size="xs" ta="center" fw={500}>
+                Added by your teacher? Sign up with the same email and you'll be placed in your classes automatically.
+              </Text>
+            )}
           </Stack>
           <TextInput
             label="Full name"

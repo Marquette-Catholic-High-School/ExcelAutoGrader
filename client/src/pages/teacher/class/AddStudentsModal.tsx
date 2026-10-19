@@ -15,15 +15,16 @@ import {
   TextInput,
 } from '@mantine/core';
 import { isEmail, useForm } from '@mantine/form';
-import { IconAlertTriangle, IconClipboardText, IconUserPlus } from '@tabler/icons-react';
+import { IconAlertTriangle, IconClipboardText, IconFileUpload, IconUserPlus } from '@tabler/icons-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { AddStudentsRequest, AddStudentsResponse } from '@shared/types';
 import { endpoints } from '../../../api/endpoints';
 import { fieldErrors, notifyError } from '../../../utils/errors';
-import { MAX_STUDENTS_PER_REQUEST, nameFromEmail, parseStudentList, type ParseResult } from './parseStudentList';
+import { MAX_STUDENTS_PER_REQUEST, parseStudentList, type ParseResult } from './parseStudentList';
 import { invalidateRoster } from './queries';
+import { RosterUploadPanel, useRosterImport } from './RosterUpload';
 
-type AddTab = 'one' | 'list';
+type AddTab = 'one' | 'list' | 'file';
 
 const PASTE_PLACEHOLDER = [
   'Jane Doe, jane.doe@school.edu',
@@ -109,7 +110,10 @@ function PastePreview({ parsed }: { parsed: ParseResult }) {
   );
 }
 
-/** Dialog for enrolling students by email: one at a time, or a list pasted from a spreadsheet. */
+/**
+ * Dialog for adding students by email: one at a time, a pasted list, or an uploaded roster file. Emails without an
+ * account become invited (pending) students, matched automatically when they sign up.
+ */
 export function AddStudentsModal({
   classId,
   opened,
@@ -125,6 +129,7 @@ export function AddStudentsModal({
   const [tab, setTab] = useState<AddTab>('one');
   const [text, setText] = useState('');
   const parsed = useMemo(() => parseStudentList(text), [text]);
+  const roster = useRosterImport(classId);
 
   const oneForm = useForm({
     mode: 'uncontrolled',
@@ -138,6 +143,7 @@ export function AddStudentsModal({
   function handleClose() {
     oneForm.reset();
     setText('');
+    roster.clear();
     setTab('one');
     add.reset();
     onClose();
@@ -152,7 +158,7 @@ export function AddStudentsModal({
     },
     onError: (err) => {
       const fields = fieldErrors(err);
-      if (tab === 'one' && Object.keys(fields).length > 0) oneForm.setErrors(fields);
+      if (tab === 'one' && (fields.email || fields.name)) oneForm.setErrors(fields);
       else notifyError(err, 'Could not add students');
     },
   });
@@ -163,8 +169,8 @@ export function AddStudentsModal({
   }
 
   const submitOne = oneForm.onSubmit((values) => {
-    const email = values.email.trim().toLowerCase();
-    add.mutate({ students: [{ email, name: values.name.trim() || nameFromEmail(email) }] });
+    // A blank name is fine: the server stores a placeholder that the student's own name replaces at sign-up.
+    add.mutate({ students: [{ email: values.email.trim().toLowerCase(), name: values.name.trim() }] });
   });
 
   const listCount = parsed.students.length;
@@ -172,14 +178,17 @@ export function AddStudentsModal({
 
   function submitList() {
     if (listCount === 0 || tooMany) return;
-    add.mutate({ students: parsed.students.map(({ name, email }) => ({ name, email })) });
+    add.mutate({
+      students: parsed.students.map(({ name, email, derivedName }) => ({ name: derivedName ? '' : name, email })),
+    });
   }
 
   return (
-    <Modal opened={opened} onClose={requestClose} title="Add students" size="lg">
+    <Modal opened={opened} onClose={requestClose} title="Add students" size={tab === 'file' ? 'xl' : 'lg'}>
       <Text size="sm" c="dimmed" mb="md">
-        Students without an account get one with a temporary password, shown to you once after adding. Students who
-        already have an account are simply enrolled.
+        Students who don't have an account yet are invited: they appear on your roster right away, you can upload work
+        for them, and they're matched automatically when they sign up with that email. Students who already have an
+        account are added straight away.
       </Text>
       <Tabs value={tab} onChange={(value) => setTab((value as AddTab | null) ?? 'one')} keepMounted={false}>
         <Tabs.List mb="md">
@@ -188,6 +197,9 @@ export function AddStudentsModal({
           </Tabs.Tab>
           <Tabs.Tab value="list" leftSection={<IconClipboardText size={16} />}>
             Paste a list
+          </Tabs.Tab>
+          <Tabs.Tab value="file" leftSection={<IconFileUpload size={16} />}>
+            Upload a file
           </Tabs.Tab>
         </Tabs.List>
 
@@ -205,7 +217,7 @@ export function AddStudentsModal({
               />
               <TextInput
                 label="Name"
-                description="Leave blank to use the name from the email address"
+                description="Optional: leave blank to use the name they sign up with"
                 placeholder="Jane Doe"
                 key={oneForm.key('name')}
                 {...oneForm.getInputProps('name')}
@@ -226,7 +238,7 @@ export function AddStudentsModal({
           <Stack gap="md">
             <Textarea
               label="Names and emails"
-              description="One student per line. Copy name and email columns straight from Excel, or type “Jane Doe, jane@school.edu”. A line with only an email works too."
+              description="One student per line. Copy name and email columns straight from Excel, or type “Jane Doe, jane@school.edu”. A line with only an email works too: they keep the name they sign up with."
               placeholder={PASTE_PLACEHOLDER}
               autosize
               minRows={6}
@@ -254,6 +266,15 @@ export function AddStudentsModal({
               </Button>
             </Group>
           </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="file">
+          <RosterUploadPanel
+            roster={roster}
+            adding={add.isPending}
+            onAdd={(students) => add.mutate({ students })}
+            onCancel={requestClose}
+          />
         </Tabs.Panel>
       </Tabs>
     </Modal>

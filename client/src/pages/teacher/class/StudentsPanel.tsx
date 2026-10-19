@@ -20,6 +20,7 @@ import {
 import {
   IconDots,
   IconKey,
+  IconMailForward,
   IconSearch,
   IconUserMinus,
   IconUserPlus,
@@ -31,6 +32,7 @@ import type { AddStudentsResponse, ClassSummary, StudentInfo } from '@shared/typ
 import { ApiRequestError } from '../../../api/client';
 import { endpoints, qk } from '../../../api/endpoints';
 import { QueryState } from '../../../components/QueryState';
+import { BADGE_NO_SHRINK, PendingBadge } from '../../../components/StatusBadges';
 import { notifyError, notifySuccess } from '../../../utils/errors';
 import { formatDateTime, fromNow } from '../../../utils/format';
 import { AddStudentsModal } from './AddStudentsModal';
@@ -38,6 +40,7 @@ import { AddStudentsResultModal, TempPasswordModal } from './AddStudentsResultMo
 import { confirmAction } from './confirmAction';
 import { CopyIconButton } from './JoinCode';
 import { invalidateRoster } from './queries';
+import { CopyInstructionsButton } from './SignUpInstructions';
 
 function JoinCodeInfo({ cls }: { cls: ClassSummary }) {
   if (!cls.joinCode) return null;
@@ -62,6 +65,30 @@ function JoinCodeInfo({ cls }: { cls: ClassSummary }) {
   );
 }
 
+const PENDING_ROW_TOOLTIP =
+  'Matched automatically when they create an account with this email. You can already upload and grade work for them.';
+
+function StatusBadge({ student }: { student: StudentInfo }) {
+  if (student.pending) {
+    return (
+      <PendingBadge
+        pending
+        size="xs"
+        label="Waiting for sign-up"
+        tooltip={PENDING_ROW_TOOLTIP}
+      />
+    );
+  }
+  if (!student.mustChangePassword) return null;
+  return (
+    <Tooltip label="This student has not chosen their own password yet.">
+      <Badge color="yellow" variant="light" size="xs" leftSection={<IconKey size={10} />} {...BADGE_NO_SHRINK}>
+        Temporary password
+      </Badge>
+    </Tooltip>
+  );
+}
+
 function StudentRow({
   student,
   onReset,
@@ -74,22 +101,19 @@ function StudentRow({
   const resetNoteId = useId();
   // Only roster rows carry the flag; a missing value means the reset is allowed.
   const canReset = student.canResetPassword !== false;
+  const resetNote = student.pending
+    ? "Also invited to another teacher's class — the student can sign up with this email instead."
+    : "Also in another teacher's class — the student can change it on their Account page.";
   return (
     <Table.Tr>
       <Table.Td>
         <Group gap="sm" wrap="nowrap">
           <Avatar name={student.name} color="initials" radius="xl" size={32} />
-          <Stack gap={2}>
+          <Stack gap={2} align="flex-start">
             <Text fw={500} size="sm">
               {student.name}
             </Text>
-            {student.mustChangePassword && (
-              <Tooltip label="This student has not chosen their own password yet.">
-                <Badge color="yellow" variant="light" size="xs" leftSection={<IconKey size={10} />} w="fit-content">
-                  Temporary password
-                </Badge>
-              </Tooltip>
-            )}
+            <StatusBadge student={student} />
           </Stack>
         </Group>
       </Table.Td>
@@ -99,14 +123,14 @@ function StudentRow({
         </Text>
       </Table.Td>
       <Table.Td>
-        <Tooltip label={formatDateTime(student.joinedAt)}>
+        <Tooltip label={`${student.pending ? 'Added' : 'Joined'} ${formatDateTime(student.joinedAt)}`}>
           <Text size="sm" w="fit-content">
-            {fromNow(student.joinedAt)}
+            {student.pending ? `Invited ${fromNow(student.joinedAt)}` : fromNow(student.joinedAt)}
           </Text>
         </Tooltip>
       </Table.Td>
       <Table.Td>
-        <Menu position="bottom-end" withinPortal width={240}>
+        <Menu position="bottom-end" withinPortal width={260}>
           <Menu.Target>
             <ActionIcon variant="subtle" color="gray" aria-label={`Actions for ${student.name}`}>
               <IconDots size={18} />
@@ -119,12 +143,21 @@ function StudentRow({
               aria-describedby={canReset ? undefined : resetNoteId}
               onClick={() => onReset(student)}
             >
-              Reset password
+              {student.pending ? (
+                <>
+                  <Text size="sm">Create a temporary password</Text>
+                  <Text size="xs" c="dimmed">
+                    Lets them sign in without signing up
+                  </Text>
+                </>
+              ) : (
+                'Reset password'
+              )}
             </Menu.Item>
             {!canReset && (
               // Outside the disabled item so it is not faded along with it.
               <Text id={resetNoteId} size="xs" c="dimmed" px="sm" pb={6}>
-                Also in another teacher's class — the student can change it on their Account page.
+                {resetNote}
               </Text>
             )}
             <Menu.Divider />
@@ -135,6 +168,22 @@ function StudentRow({
         </Menu>
       </Table.Td>
     </Table.Tr>
+  );
+}
+
+/** Shown while some students haven't signed up yet. */
+function PendingInfo({ cls, count }: { cls: ClassSummary; count: number }) {
+  return (
+    <Alert variant="light" color="grape" icon={<IconMailForward />} p="sm">
+      <Group justify="space-between" gap="sm" wrap="wrap">
+        <Text size="sm" style={{ flex: '1 1 320px' }}>
+          {count === 1 ? "1 invited student hasn't" : `${count} invited students haven't`} signed up yet. They're
+          matched automatically when they create an account with the email you added, and you can upload work for
+          them in the meantime.
+        </Text>
+        <CopyInstructionsButton cls={cls} />
+      </Group>
+    </Alert>
   );
 }
 
@@ -154,7 +203,8 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
   const resetPassword = useMutation({
     mutationFn: (s: StudentInfo) => endpoints.resetStudentPassword(cls.id, s.id),
     onSuccess: (res, student) => {
-      void qc.invalidateQueries({ queryKey: qk.students(cls.id) });
+      // A pending student stops being pending, which the submissions tables and gradebook show too.
+      invalidateRoster(qc, cls.id);
       setResetResult({ student, tempPassword: res.tempPassword });
     },
     onError: (err) => {
@@ -176,6 +226,16 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
   });
 
   function confirmReset(student: StudentInfo) {
+    if (student.pending) {
+      confirmAction({
+        title: `Create a temporary password for ${student.name}?`,
+        message: `They can then sign in with ${student.email} and this password right away instead of signing up, and choose their own password after signing in. You'll see the password once so you can pass it on.`,
+        confirmLabel: 'Create password',
+        color: 'brand',
+        action: () => resetPassword.mutateAsync(student),
+      });
+      return;
+    }
     confirmAction({
       title: `Reset ${student.name}'s password?`,
       message:
@@ -189,8 +249,10 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
   function confirmRemove(student: StudentInfo) {
     confirmAction({
       title: `Remove ${student.name} from ${cls.name}?`,
-      message:
-        'They lose access to this class and its assignments. Their account and past submissions are kept, so if they rejoin later their work is still there.',
+      message: student.pending
+        ? `They haven't signed up yet. Once removed, signing up with ${student.email} no longer adds them to this ` +
+          'class. Any work you uploaded for them is kept and comes back if you add them again.'
+        : 'They lose access to this class and its assignments. Their account and past submissions are kept, so if they rejoin later their work is still there.',
       confirmLabel: 'Remove student',
       color: 'red',
       action: () => remove.mutateAsync(student),
@@ -217,7 +279,7 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
                   size="md"
                   icon={<IconUsers size={32} />}
                   title="No students yet"
-                  description="Add students by email and we'll create their accounts with temporary passwords, or share the join code above so they can sign up and join on their own."
+                  description="Add students by email (one at a time, a pasted list or a roster file). They're matched to their accounts automatically when they sign up with that email. Or share the join code above so they can join on their own."
                 >
                   <EmptyState.Actions>{addButton}</EmptyState.Actions>
                 </EmptyState>
@@ -225,7 +287,8 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
             );
           }
           const visible = students.filter((s) => matches(s, search));
-          const temporary = students.filter((s) => s.mustChangePassword).length;
+          const temporary = students.filter((s) => !s.pending && s.mustChangePassword).length;
+          const pending = students.filter((s) => s.pending).length;
           return (
             <>
               <Stack gap={6}>
@@ -242,9 +305,11 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
                 </Group>
                 <Text size="sm" c="dimmed">
                   {students.length} {students.length === 1 ? 'student' : 'students'}
+                  {pending > 0 && ` · ${pending} waiting for sign-up`}
                   {temporary > 0 && ` · ${temporary} still using a temporary password`}
                 </Text>
               </Stack>
+              {pending > 0 && <PendingInfo cls={cls} count={pending} />}
               <Card p={0}>
                 <Table.ScrollContainer minWidth={620}>
                   <Table verticalSpacing="sm" horizontalSpacing="md" highlightOnHover>
@@ -286,7 +351,7 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
         onClose={() => setAddOpen(false)}
         onAdded={(result) => setAddResult(result)}
       />
-      <AddStudentsResultModal result={addResult} onClose={() => setAddResult(null)} />
+      <AddStudentsResultModal cls={cls} result={addResult} onClose={() => setAddResult(null)} />
       <TempPasswordModal data={resetResult} onClose={() => setResetResult(null)} />
     </Stack>
   );

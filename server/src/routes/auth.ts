@@ -11,7 +11,7 @@ import {
   toUser,
   verifyPassword,
 } from '../auth.js';
-import { get, nowIso, run, transaction, type UserRow } from '../db.js';
+import { all, get, nowIso, run, transaction, type UserRow } from '../db.js';
 import { badRequest, HttpError } from '../http.js';
 import {
   findUserByEmail,
@@ -26,6 +26,10 @@ const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_MAX_LENGTH = 200;
 const INVALID_LOGIN = 'Incorrect email or password.';
 const EMAIL_TAKEN = 'An account with this email already exists. Try signing in instead.';
+const NEEDS_SIGNUP =
+  "Your teacher added this email, but you haven't created your account yet. Choose “Create an account” and sign " +
+  'up with this email.';
+const INVITED_AS_STUDENT = 'A teacher added this email as a student. Sign up as a student to join your classes.';
 
 const router = Router();
 
@@ -71,9 +75,49 @@ function spendHashTime(password: string): void {
   verifyPassword(password, timingHash);
 }
 
+/** Names of the classes the student is enrolled in, in the order they were added. */
+function classNames(studentId: number): string[] {
+  return all<{ name: string }>(
+    `SELECT c.name FROM enrollments e JOIN classes c ON c.id = e.class_id
+     WHERE e.student_id = ? ORDER BY e.joined_at, c.id`,
+    studentId,
+  ).map((row) => row.name);
+}
+
+/**
+ * The sign-up of a student a teacher added by email: takes over the pending account (with its enrollments and the
+ * submissions the teacher uploaded) instead of creating a new one. The teacher's name for the student is kept unless
+ * it was made up from the email. The account now has a password only the student knows, so the inviting teacher
+ * stops being its creator: from here on the inviter may reset the password only like any other teacher (when the
+ * student is in no other teacher's class), never take over an account another teacher's class depends on.
+ */
+function claimPendingAccount(pendingId: number, input: RegisterRequest): AuthResponse {
+  const hash = hashPassword(input.password);
+  return transaction(() => {
+    // Re-checked here so the account can only be claimed once.
+    const { changes } = run(
+      `UPDATE users SET password_hash = ?, pending = 0, must_change_password = 0, placeholder_name = 0,
+         created_by_teacher_id = NULL, name = CASE WHEN placeholder_name = 1 THEN ? ELSE name END
+       WHERE id = ? AND pending = 1 AND role = 'student'`,
+      hash,
+      input.name,
+      pendingId,
+    );
+    if (changes === 0) throw new HttpError(409, EMAIL_TAKEN, { email: EMAIL_TAKEN });
+    return { ...authResponse(loadUser(pendingId)), claimedClasses: classNames(pendingId) };
+  });
+}
+
 router.post('/api/auth/register', (req, res) => {
   const input = parseRegistration(jsonBody(req));
-  if (findUserByEmail(input.email)) throw new HttpError(409, EMAIL_TAKEN, { email: EMAIL_TAKEN });
+  const existing = findUserByEmail(input.email);
+  if (existing?.pending) {
+    if (input.role !== 'student') throw new HttpError(409, INVITED_AS_STUDENT, { email: INVITED_AS_STUDENT });
+    const claimed: AuthResponse = claimPendingAccount(existing.id, input);
+    res.status(201).json(claimed);
+    return;
+  }
+  if (existing) throw new HttpError(409, EMAIL_TAKEN, { email: EMAIL_TAKEN });
 
   const { lastInsertRowid } = run(
     `INSERT INTO users (email, name, password_hash, role, must_change_password, created_at)
@@ -102,6 +146,8 @@ router.post('/api/auth/login', (req, res) => {
     spendHashTime(password);
     throw new HttpError(401, INVALID_LOGIN);
   }
+  // A pending account has no password to check; the student has to sign up first.
+  if (user.pending) throw new HttpError(401, NEEDS_SIGNUP, { email: NEEDS_SIGNUP }, 'needs_signup');
   if (!verifyPassword(password, user.password_hash)) throw new HttpError(401, INVALID_LOGIN);
 
   run('DELETE FROM sessions WHERE user_id = ? AND expires_at < ?', user.id, nowIso());

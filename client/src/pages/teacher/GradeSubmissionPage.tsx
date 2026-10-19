@@ -18,7 +18,7 @@ import { isNotFoundError } from '../../components/NotFoundCard';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorAlert, PageLoader } from '../../components/QueryState';
 import type { CellFocus } from '../../components/SpreadsheetViewer';
-import { LateAlert, LateBadge, TeacherStatusBadge } from '../../components/StatusBadges';
+import { LateAlert, LateBadge, PendingBadge, TeacherStatusBadge } from '../../components/StatusBadges';
 import { formatDateTime, isPast } from '../../utils/format';
 import { parseId } from '../../utils/params';
 import { usePageTitle } from '../../utils/usePageTitle';
@@ -93,6 +93,7 @@ function GradeWorkspace({
   const row = index >= 0 ? rows[index] : null;
   const attempts = attemptsQ.data ?? [];
   const studentName = row?.student.name ?? attempts[0]?.studentName ?? 'Student';
+  const student = { id: studentId, name: studentName, pending: !!row?.student.pending };
   const prev = index > 0 ? rows[index - 1] : null;
   const next = index >= 0 && index < rows.length - 1 ? rows[index + 1] : null;
   const nextNeeds = findNextNeedsGrading(rows, index);
@@ -230,7 +231,7 @@ function GradeWorkspace({
       />
     );
   } else if (!selected) {
-    body = <NoSubmissionCard assignment={assignment} student={{ id: studentId, name: studentName }} />;
+    body = <NoSubmissionCard assignment={assignment} student={student} />;
   } else {
     const report = selected.report && (
       <Card>
@@ -321,6 +322,7 @@ function GradeWorkspace({
         badges={
           <>
             {row && <TeacherStatusBadge status={row.status} pastDue={isPast(assignment.dueAt)} size="md" />}
+            {row && <PendingBadge pending={row.student.pending} size="md" />}
             {selected && <LateBadge late={selected.late} lateBySeconds={selected.lateBySeconds} size="md" />}
           </>
         }
@@ -339,7 +341,7 @@ function GradeWorkspace({
           opened={uploadOpened}
           onClose={uploadHandlers.close}
           assignment={assignment}
-          student={{ id: studentId, name: studentName }}
+          student={student}
           onUploaded={(submission) => setSelectedId(submission.id)}
         />
       )}

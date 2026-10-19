@@ -19,12 +19,16 @@ export function setToken(token: string | null): void {
   }
 }
 
-/** Error thrown for any non-2xx API response. `message` is the server's user-facing `error` text. */
+/**
+ * Error thrown for any non-2xx API response. `message` is the server's user-facing `error` text; `code` is the
+ * optional machine-readable reason (e.g. 'needs_signup').
+ */
 export class ApiRequestError extends Error {
   constructor(
     public status: number,
     message: string,
     public fields?: Record<string, string>,
+    public code?: ApiError['code'],
   ) {
     super(message);
   }
@@ -44,7 +48,7 @@ async function toError(res: Response): Promise<ApiRequestError> {
     // non-JSON error (proxy down etc.)
   }
   const fallback = res.status === 0 || res.status >= 500 ? 'The server is not responding. Is it running?' : res.statusText;
-  return new ApiRequestError(res.status, body.error || fallback || 'Request failed', body.fields);
+  return new ApiRequestError(res.status, body.error || fallback || 'Request failed', body.fields, body.code);
 }
 
 async function request(method: string, path: string, body?: unknown): Promise<Response> {
@@ -87,17 +91,21 @@ export const api = {
   async download(path: string, fallbackName = 'download.xlsx'): Promise<void> {
     const res = await request('GET', path);
     const blob = await res.blob();
-    const name = filenameFromDisposition(res.headers.get('Content-Disposition')) ?? fallbackName;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    saveBlob(blob, filenameFromDisposition(res.headers.get('Content-Disposition')) ?? fallbackName);
   },
 };
+
+/** Triggers a browser download of `blob` (fetched or generated in the page) under `name`. */
+export function saveBlob(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
 
 /**
  * The file name from a Content-Disposition header: the UTF-8 `filename*` form when present, else the quoted

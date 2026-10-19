@@ -105,3 +105,14 @@ export function cellPrimitive(cell: XLSX.CellObject): { value: CellPrimitive; is
   if (typeof v === 'number' && !Number.isFinite(v)) return { value: '#NUM!', isError: true, missing: false };
   return { value: v, isError: false, missing: false };
 }
+
+/**
+ * The cell as the workbook displays it, trimmed: the formatted text when SheetJS has it (so "00123" or "1/2/2026" in
+ * a CSV stay as typed), else the raw value as text. '' for empty cells and formulas without a result.
+ */
+export function cellText(cell: XLSX.CellObject): string {
+  if (cell.t === 'z' || lacksCachedValue(cell)) return '';
+  if (cell.t === 'e') return errorText(cell);
+  if (typeof cell.w === 'string') return cell.w.trim();
+  return cell.v === undefined || cell.v === null ? '' : String(cell.v).trim();
+}

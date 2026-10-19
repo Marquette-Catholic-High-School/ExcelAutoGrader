@@ -1,7 +1,7 @@
 # Sample workbooks
 
-Ready-made Excel files for trying the autograder by hand. `npm run seed` regenerates them; they are
-the same workbooks the demo data uses.
+Ready-made Excel files for trying the autograder by hand, and a class roster for trying a roster upload.
+`npm run seed -- --samples` regenerates them; the workbooks are the same ones the demo data uses.
 
 Scores below assume the starter file is attached to the assignment and the default grading settings
 (check every filled cell, formulas required, skip cells copied from the starter).
@@ -40,3 +40,9 @@ cells.
 | File | Upload it as | What it shows |
 |---|---|---|
 | `sales-report-student.xlsx` | Student submission to a **manually graded** assignment | A two-sheet report (`Q3 Sales` with totals, shares, best month and top region; `Summary` with a short write-up). There is no answer key for this one: open it in the in-browser viewer from the grading page and enter a score yourself. |
+
+## Class roster
+
+| File | Upload it as | What it shows |
+|---|---|---|
+| `class-roster.csv` | A roster, when adding students to a class | `First Name`, `Last Name` and `Email` columns for five students. Uploaded to the demo's Business Computing 101, four are new (they are invited and matched when they sign up; Leo has no name, so one is made from his email) and Ava is already in the class. |

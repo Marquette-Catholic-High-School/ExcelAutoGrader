@@ -71,6 +71,30 @@ describe('file formats', () => {
     assert.equal(cells.B2.v, '€5 déjà vu');
   });
 
+  test('a UTF-16 CSV does not break the files read after it', () => {
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Name\tNote\r\nJosé\tdéjà vu\r\n', 'utf16le')]);
+    const { wb } = parseWorkbookBuffer(utf16, '.csv');
+    assert.equal(wb.Sheets[wb.SheetNames[0]].A2.v, 'José');
+    assert.deepEqual(parseWorkbookBuffer(buildWorkbook([SHEET]), '.xlsx').wb.SheetNames, ['Budget']);
+    assert.equal(parseWorkbookBuffer(Buffer.from('Item\nCafé\n'), '.csv').wb.Sheets.Sheet1.A2.v, 'Café');
+  });
+
+  test('CSVs in Excel’s legacy encodings keep their accents and punctuation', () => {
+    const text = (buf: Buffer) => {
+      const { wb } = parseWorkbookBuffer(buf, '.csv');
+      return (wb.Sheets[wb.SheetNames[0]].A2 as XLSX.CellObject).v;
+    };
+    // Windows-1252: 0x92 ’, 0x8A Š, 0x80 €, 0xE9 é.
+    const windows = Buffer.from([...Buffer.from('Name\nO'), 0x92, ...Buffer.from('Brien '), 0x8a, 0x80, 0xe9, 0x0a]);
+    assert.equal(text(windows), 'O’Brien Š€é');
+    // Mac Roman: 0x8E é, 0x96 ñ (Windows-1252 would read "JosŽ Mu–oz").
+    const mac = Buffer.from([...Buffer.from('Name\nJos'), 0x8e, ...Buffer.from(' Mu'), 0x96, ...Buffer.from('oz\n')]);
+    assert.equal(text(mac), 'José Muñoz');
+    // Latin-1 accents stay Windows-1252 (Mac Roman would read "JosÈ N˙Òez").
+    const latin = Buffer.from([...Buffer.from('Name\nJos'), 0xe9, ...Buffer.from(' N'), 0xfa, 0xf1, ...Buffer.from('ez\n')]);
+    assert.equal(text(latin), 'José Núñez');
+  });
+
   test('CSV numbers, percents and dates are parsed like Excel', () => {
     const csv = writeTemp('values.csv', 'Total,Share,Due\n"$1,234.50",25%,10/16/2026\n');
     const cells = parseWorkbookForViewer(csv, 'values.csv').sheets[0].cells;

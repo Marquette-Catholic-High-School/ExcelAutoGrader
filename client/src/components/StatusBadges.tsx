@@ -3,7 +3,7 @@
  * The LATE flag must look identical everywhere: red, filled, with a clock icon.
  */
 import { Alert, Badge, Tooltip, type BadgeProps, type MantineSize } from '@mantine/core';
-import { IconAlertTriangle, IconClockExclamation, IconPencil, IconRobot } from '@tabler/icons-react';
+import { IconAlertTriangle, IconClockExclamation, IconMailForward, IconPencil, IconRobot } from '@tabler/icons-react';
 import type { GradingMode, StudentAssignmentStatus, TeacherRowStatus } from '@shared/types';
 import { formatDateTime, formatDuration } from '../utils/format';
 
@@ -121,5 +121,44 @@ export function GradingModeBadge({ mode, size = 'sm' }: { mode: GradingMode; siz
     <Badge color="indigo" variant="outline" size={size} leftSection={<IconPencil size={12} />} {...BADGE_NO_SHRINK}>
       Manual grading
     </Badge>
+  );
+}
+
+const PENDING_TOOLTIP =
+  "Added by email. They're matched to this account automatically when they sign up, and you can already upload and " +
+  'grade work for them.';
+
+/**
+ * Marks a student a teacher added by email who has not created their account yet (StudentInfo.pending).
+ * Renders nothing for other students. Pass `tooltip={null}` to drop the explanation.
+ */
+export function PendingBadge({
+  pending,
+  size = 'sm',
+  label = 'Not signed up yet',
+  tooltip = PENDING_TOOLTIP,
+}: {
+  pending: boolean;
+  size?: MantineSize;
+  label?: string;
+  tooltip?: string | null;
+}) {
+  if (!pending) return null;
+  const badge = (
+    <Badge
+      color="grape"
+      variant="light"
+      size={size}
+      leftSection={<IconMailForward size={size === 'xs' ? 10 : 12} />}
+      {...BADGE_NO_SHRINK}
+    >
+      {label}
+    </Badge>
+  );
+  if (!tooltip) return badge;
+  return (
+    <Tooltip label={tooltip} multiline maw={300}>
+      {badge}
+    </Tooltip>
   );
 }

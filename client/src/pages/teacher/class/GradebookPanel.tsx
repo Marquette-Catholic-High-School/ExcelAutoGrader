@@ -19,7 +19,7 @@ import { Link, useNavigate } from 'react-router';
 import type { AssignmentSummary, GradebookCell, GradebookResponse, StudentInfo } from '@shared/types';
 import { endpoints, qk } from '../../../api/endpoints';
 import { QueryState } from '../../../components/QueryState';
-import { LateBadge } from '../../../components/StatusBadges';
+import { LateBadge, PendingBadge } from '../../../components/StatusBadges';
 import { notifyError } from '../../../utils/errors';
 import { formatDateTime, formatScore, isPast, percent, scoreColor, scoreTextColor } from '../../../utils/format';
 import classes from './cards.module.css';
@@ -185,9 +185,13 @@ function GradebookTable({ data }: { data: GradebookResponse }) {
               return (
                 <Table.Tr key={s.id}>
                   <Table.Td className={classes.stickyCol}>
-                    <Text size="sm" fw={500} lineClamp={1}>
-                      {s.name}
-                    </Text>
+                    {/* The badge wraps under the name when the sticky column is narrow (phones). */}
+                    <Group gap={4} wrap="wrap">
+                      <Text size="sm" fw={500} lineClamp={1} style={{ minWidth: 0 }}>
+                        {s.name}
+                      </Text>
+                      <PendingBadge pending={s.pending} size="xs" />
+                    </Group>
                     <Text size="xs" c="dimmed" lineClamp={1}>
                       {s.email}
                     </Text>

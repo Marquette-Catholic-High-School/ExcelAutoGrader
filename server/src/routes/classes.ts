@@ -1,15 +1,17 @@
-import { Router, type Request } from 'express';
+import { Router, type Request, type RequestHandler } from 'express';
 import type {
   AddStudentsResponse,
   ClassSummary,
   OkResponse,
   ResetPasswordResponse,
+  RosterPreview,
   StudentInfo,
 } from '../../../shared/types.js';
 import { classAccess, teacherClass } from '../access.js';
 import { currentUser, requireAuth, requireRole } from '../auth.js';
 import { get, run, type ClassRow } from '../db.js';
 import { badRequest, forbidden, HttpError, intParam, notFound } from '../http.js';
+import { upload } from '../uploads.js';
 import {
   addStudents,
   canManageStudentPassword,
@@ -25,11 +27,13 @@ import {
   MAX_STUDENTS_PER_REQUEST,
   NAME_MAX_LENGTH,
   normalizeJoinCode,
+  removeStudentFromClass,
   resetStudentPassword,
-  unenroll,
   uniqueJoinCode,
   validationError,
 } from '../services/classes.js';
+import { previewRoster } from '../services/rosterImport.js';
+import { withUploads } from '../services/upload-tracker.js';
 
 const router = Router();
 
@@ -153,7 +157,7 @@ router.get('/api/classes/:classId/students', requireAuth, (req, res) => {
   res.json(body);
 });
 
-router.post('/api/classes/:classId/students', requireAuth, async (req, res) => {
+router.post('/api/classes/:classId/students', requireAuth, (req, res) => {
   const cls = teacherClass(classIdOf(req), currentUser(req));
   const rows = jsonBody(req).students;
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -163,20 +167,56 @@ router.post('/api/classes/:classId/students', requireAuth, async (req, res) => {
     const message = `You can add at most ${MAX_STUDENTS_PER_REQUEST} students at a time.`;
     throw badRequest(message, { students: message });
   }
-  const body: AddStudentsResponse = await addStudents(cls.id, rows);
+  const body: AddStudentsResponse = addStudents(cls.id, rows);
   res.json(body);
 });
 
-/** Un-enrolls only: the student's account and submissions are kept (re-adding them restores their work). */
+/** Checks that the caller owns the class before multer stores anything. */
+const ownsClass: RequestHandler = (req, _res, next) => {
+  teacherClass(classIdOf(req), currentUser(req));
+  next();
+};
+
+/** upload.single('file'), with a rejected file (wrong extension) reported on the `file` field like other problems. */
+const rosterFile: RequestHandler = (req, res, next) => {
+  upload.single('file')(req, res, (err?: unknown) => {
+    if (err instanceof HttpError && !err.fields) err.fields = { file: err.message };
+    next(err);
+  });
+};
+
+/** What adding the students of an uploaded roster file would do; nothing is saved and the upload is discarded. */
+router.post(
+  '/api/classes/:classId/students/import-preview',
+  requireAuth,
+  ownsClass,
+  rosterFile,
+  withUploads((req, res, uploads) => {
+    const cls = teacherClass(classIdOf(req), currentUser(req));
+    const file = uploads.file('file');
+    if (!file) {
+      const message = 'Choose a CSV or Excel file with your class roster.';
+      throw badRequest(message, { file: message });
+    }
+    const body: RosterPreview = previewRoster(cls.id, file.path, file.originalname);
+    res.json(body);
+  }),
+);
+
+/**
+ * Un-enrolls: the student's account and submissions are kept (re-adding them restores their work). Only a pending
+ * account with nothing left to keep (no class, no submission) is deleted.
+ */
 router.delete('/api/classes/:classId/students/:studentId', requireAuth, (req, res) => {
   const cls = teacherClass(classIdOf(req), currentUser(req));
-  if (!unenroll(cls.id, studentIdOf(req))) throw notInClass();
+  if (!removeStudentFromClass(cls.id, studentIdOf(req))) throw notInClass();
   res.json(ok);
 });
 
 /**
  * Only for accounts this teacher created, or students in no other teacher's class: otherwise any teacher could
- * enroll a student by email and take over their account (see canManageStudentPassword).
+ * enroll a student by email and take over their account (see canManageStudentPassword). For a pending student this
+ * creates their first password, so they sign in with it instead of signing up.
  */
 router.post('/api/classes/:classId/students/:studentId/reset-password', requireAuth, (req, res) => {
   const teacher = currentUser(req);

@@ -1,12 +1,14 @@
 import { useState, type ReactNode } from 'react';
 import { Alert, Anchor, Button, Center, Paper, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
 import { isEmail, isNotEmpty, useForm } from '@mantine/form';
-import { IconAlertCircle, IconLogin } from '@tabler/icons-react';
+import { IconAlertCircle, IconLogin, IconMailForward, IconUserPlus } from '@tabler/icons-react';
 import { Link } from 'react-router';
+import { ApiRequestError } from '../../api/client';
 import { useAuth } from '../../auth/AuthContext';
 import { BrandMark } from '../../components/AppLayout';
 import { errorMessage, fieldErrors } from '../../utils/errors';
 import { usePageTitle } from '../../utils/usePageTitle';
+import type { RegisterPrefill } from './RegisterPage';
 
 /** Centered, branded card shared by the sign-in and sign-up pages. */
 export function AuthCard({
@@ -44,19 +46,47 @@ export function AuthCard({
   );
 }
 
-/** One-line reminder that teachers can create student accounts, shown under both auth cards. */
-export function TeacherCreatedAccountNote() {
+/** Reminder for students whose teacher added them by email or gave them a temporary password (under both cards). */
+export function TeacherCreatedAccountNote({ page }: { page: 'login' | 'register' }) {
   return (
     <Text size="xs" c="dimmed" ta="center" px="md">
-      Students: your teacher may have already created an account for you. Sign in with your school email and the
-      temporary password they gave you.
+      {page === 'login'
+        ? 'Students: if your teacher added you by email, choose “Create an account” and sign up with that email. ' +
+          'Got a temporary password from your teacher? Sign in with it here.'
+        : 'Students: got a temporary password from your teacher? Sign in with it instead of creating an account.'}
     </Text>
+  );
+}
+
+/** Login with an email a teacher added that has no account yet: point the student to sign-up with that email. */
+function NeedsSignupAlert({ email }: { email: string }) {
+  // The email travels in router state, not the URL, so it stays out of the browser history.
+  const signupState: RegisterPrefill = { email };
+  return (
+    <Alert color="grape" variant="light" icon={<IconMailForward />} title="Create your account first">
+      <Stack gap="sm" align="flex-start">
+        <Text size="sm">
+          Your teacher added <b>{email}</b> to a class, but there's no account for it yet. Sign up with this email and
+          you'll be placed in your classes automatically.
+        </Text>
+        <Button
+          component={Link}
+          to="/register?role=student"
+          state={signupState}
+          size="sm"
+          leftSection={<IconUserPlus size={16} />}
+        >
+          Create your account
+        </Button>
+      </Stack>
+    </Alert>
   );
 }
 
 export function LoginPage() {
   const { login } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const [signupEmail, setSignupEmail] = useState<string | null>(null);
   usePageTitle('Sign in');
 
   const form = useForm({
@@ -70,10 +100,16 @@ export function LoginPage() {
 
   async function handleSubmit(values: { email: string; password: string }) {
     setError(null);
+    setSignupEmail(null);
+    const email = values.email.trim();
     try {
       // The guest-only route guard sees the new user and redirects (to the page the user wanted, if any).
-      await login({ email: values.email.trim(), password: values.password });
+      await login({ email, password: values.password });
     } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'needs_signup') {
+        setSignupEmail(email);
+        return;
+      }
       const fields = fieldErrors(err);
       if (Object.keys(fields).length > 0) form.setErrors(fields);
       else setError(errorMessage(err));
@@ -92,12 +128,13 @@ export function LoginPage() {
               Create an account
             </Anchor>
           </Text>
-          <TeacherCreatedAccountNote />
+          <TeacherCreatedAccountNote page="login" />
         </Stack>
       }
     >
       <form onSubmit={form.onSubmit(handleSubmit)} noValidate>
         <Stack gap="md">
+          {signupEmail && <NeedsSignupAlert email={signupEmail} />}
           {error && (
             <Alert color="red" variant="light" icon={<IconAlertCircle />} title="Could not sign in">
               {error}

@@ -30,6 +30,11 @@ export interface User {
 export interface AuthResponse {
   token: string;
   user: User;
+  /**
+   * Register only: present when the sign-up matched an account a teacher had already added by email (an invited
+   * student). Lists the names of the classes the student is now in, so the app can welcome them.
+   */
+  claimedClasses?: string[];
 }
 
 export interface RegisterRequest {
@@ -53,6 +58,11 @@ export interface ApiError {
   error: string;
   /** Optional field-level messages, keyed by request field name. */
   fields?: Record<string, string>;
+  /**
+   * Optional machine-readable reason. Currently only `needs_signup`: login with an email a teacher added that has
+   * no account yet (the student should use "Create an account" with that email).
+   */
+  code?: 'needs_signup';
 }
 
 export interface OkResponse {
@@ -94,6 +104,11 @@ export interface StudentInfo {
   joinedAt: string;
   mustChangePassword: boolean;
   /**
+   * True for a student a teacher added by email who has not signed up yet. The account exists (it can be enrolled,
+   * graded and submitted for by the teacher) but has no password; the first sign-up with this email takes it over.
+   */
+  pending: boolean;
+  /**
    * Roster responses only (GET /api/classes/:classId/students and AddStudentsResponse): whether the calling
    * teacher may reset this student's password (see the reset-password rule in docs/API.md). Omitted
    * elsewhere; clients treat a missing value as true and must still handle a 403 from reset-password.
@@ -102,17 +117,46 @@ export interface StudentInfo {
 }
 
 export interface AddStudentsRequest {
+  /** `name` may be empty: a placeholder is made from the email and replaced by the student's own name at sign-up. */
   students: { name: string; email: string }[];
 }
 
 export interface AddedStudentResult {
   student: StudentInfo;
-  /** True if a brand-new student account was created. */
+  /** True if a new (pending, invited) student account was created for this email. */
   created: boolean;
-  /** Present only when `created` is true: the one-time temporary password to give the student. */
+  /** Same as student.pending: the student has not signed up yet and will be matched by email when they do. */
+  pending: boolean;
+  /** No longer sent (accounts are invited, not given passwords). Kept for older clients; always absent. */
   tempPassword?: string;
   /** True if the student was already enrolled in this class (nothing changed). */
   alreadyEnrolled: boolean;
+}
+
+/** One data row of an uploaded class roster, as POST .../students/import-preview read it. */
+export interface RosterPreviewRow {
+  /** Row number in the file, as a spreadsheet program shows it (1-based, header row included). */
+  line: number;
+  name: string;
+  email: string;
+  /**
+   * invite:  nobody has signed up with this email yet (no account, or one another teacher invited that is still
+   *          pending); it will be added and matched when the student signs up
+   * add:     an existing student account that has signed up; it is added to the class right away
+   * already: already in this class (nothing to do)
+   * error:   can't be added (see `error`)
+   */
+  status: 'invite' | 'add' | 'already' | 'error';
+  error?: string;
+}
+
+export interface RosterPreview {
+  fileName: string;
+  rows: RosterPreviewRow[];
+  /** Which columns were used, as shown to the teacher, e.g. { email: 'Email Address', name: 'First Name + Last Name' }. */
+  columns: { email: string; name: string | null };
+  /** Things worth knowing that didn't stop the import (skipped blank rows, duplicates merged, row limit, ...). */
+  warnings: string[];
 }
 
 export interface AddStudentsResponse {

@@ -11,6 +11,7 @@
  * docs/API.md ("Autograder rules").
  */
 import type { GradeReport, GradingConfig, KeyPreview, WorkbookData } from '../../../shared/types.js';
+import { cellText, forEachCell } from './cells.js';
 import { normalizeGradingConfig as normalizeConfig } from './config.js';
 import { WorkbookReadError } from './errors.js';
 import { gradeModels, previewModels } from './grade.js';
@@ -39,6 +40,25 @@ export function normalizeGradingConfig(input: unknown): GradingConfig {
  */
 export function assertReadableWorkbook(filePath: string): void {
   loadWorkbook(filePath);
+}
+
+/**
+ * The first sheet as displayed text, for importing lists such as class rosters: `rows[r][c]` is the trimmed text of
+ * the cell at row r, column c (0-based, so r + 1 is the row number a spreadsheet program shows), '' when empty.
+ * Columns from `maxColumns` on are ignored. Read like every other upload (format sniffing, size limits, CSV
+ * encodings and semicolons), so it throws WorkbookReadError for unreadable files.
+ */
+export function readFirstSheetText(filePath: string, maxColumns: number): string[][] {
+  const { wb } = loadWorkbook(filePath);
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows: string[][] = [];
+  if (!ws) return rows;
+  forEachCell(ws, (cell, r, c) => {
+    if (c >= maxColumns) return;
+    const text = cellText(cell);
+    if (text) (rows[r] ??= [])[c] = text;
+  });
+  return Array.from(rows, (row) => Array.from(row ?? [], (text) => text ?? ''));
 }
 
 /** Workbook → JSON for the in-browser viewer (values, formatted text, formulas, merges). */

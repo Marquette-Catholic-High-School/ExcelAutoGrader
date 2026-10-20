@@ -11,6 +11,7 @@ export function signUpInstructions(cls: Pick<ClassSummary, 'name' | 'joinCode'>)
     `1. Open ${origin}/register`,
     '2. Choose "I\'m a student".',
     '3. Sign up with your school email, the same address your teacher used to add you to the class.',
+    ...(cls.joinCode ? [`4. If you're asked for a class code, enter ${cls.joinCode}.`] : []),
     '',
     `You'll be placed in ${cls.name} automatically and see your assignments, including any work your teacher ` +
       'already uploaded for you.',

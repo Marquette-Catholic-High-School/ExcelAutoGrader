@@ -62,8 +62,12 @@ const roster = async (fx: ClassFixture) =>
     'roster',
   );
 
-const register = (name: string, email: string, role: 'student' | 'teacher', password = 'my-password-1') =>
-  srv.request<Body<AuthResponse>>('POST', '/api/auth/register', { json: { name, email, password, role } });
+const register = (
+  name: string,
+  email: string,
+  role: 'student' | 'teacher',
+  { password = 'my-password-1', joinCode }: { password?: string; joinCode?: string } = {},
+) => srv.request<Body<AuthResponse>>('POST', '/api/auth/register', { json: { name, email, password, role, joinCode } });
 
 const login = (email: string, password: string) =>
   srv.request<Body<AuthResponse>>('POST', '/api/auth/login', { json: { email, password } });
@@ -77,6 +81,15 @@ const resetPassword = (fx: ClassFixture, studentId: number) =>
     `/api/classes/${fx.classId}/students/${studentId}/reset-password`,
     { token: fx.teacher.token },
   );
+
+/** The class's join code, as its teacher sees it. */
+async function joinCode(fx: ClassFixture): Promise<string> {
+  const cls = expectOk(
+    await srv.request<ClassSummary>('GET', `/api/classes/${fx.classId}`, { token: fx.teacher.token }),
+    'class',
+  );
+  return cls.joinCode!;
+}
 
 /** Invites one email into the class and returns the pending student. */
 async function invite(fx: ClassFixture, email: string, name = ''): Promise<StudentInfo> {
@@ -101,6 +114,7 @@ describe('inviting students who have no account yet', () => {
   let alan: StudentInfo;
   let graceEmail: string;
   let assignmentId: number;
+  let code: string;
 
   before(async () => {
     fx = await setupClass(srv, [], 'Invited Spreadsheets');
@@ -112,6 +126,7 @@ describe('inviting students who have no account yet', () => {
     assert.equal(res.status, 200, JSON.stringify(res.body));
     [grace, alan] = res.body.added.map((a) => a.student);
     assignmentId = (await createAssignment(srv, fx, { title: 'Budget' })).id;
+    code = await joinCode(fx);
   });
 
   it('adds them as pending students with the teacher’s name or a placeholder made from the email', async () => {
@@ -190,7 +205,7 @@ describe('inviting students who have no account yet', () => {
   });
 
   it('matches the student’s sign-up to the account, with their classes and the teacher’s uploads', async () => {
-    const res = await register('Grace B. Hopper', `  ${graceEmail.toUpperCase()}  `, 'student');
+    const res = await register('Grace B. Hopper', `  ${graceEmail.toUpperCase()}  `, 'student', { joinCode: code });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.equal(res.body.user.id, grace.id);
     assert.equal(res.body.user.name, 'Grace B. Hopper', 'the placeholder name is replaced');
@@ -227,14 +242,14 @@ describe('inviting students who have no account yet', () => {
 
   it('keeps a name the teacher typed when the student signs up', async () => {
     const email = dbm.get<{ email: string }>('SELECT email FROM users WHERE id = ?', alan.id)!.email;
-    const res = await register('Al T', email, 'student');
+    const res = await register('Al T', email, 'student', { joinCode: code });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.equal(res.body.user.name, 'Alan Turing');
     assert.deepEqual(res.body.claimedClasses, ['Invited Spreadsheets']);
   });
 
   it('treats a second sign-up with the same email as a duplicate', async () => {
-    const res = await register('Impostor', graceEmail, 'student');
+    const res = await register('Impostor', graceEmail, 'student', { joinCode: code });
     assert.equal(res.status, 409);
     assert.equal(res.body.error, 'An account with this email already exists. Try signing in instead.');
     assert.equal(res.body.claimedClasses, undefined);
@@ -245,6 +260,119 @@ describe('inviting students who have no account yet', () => {
     const res = await register('Fresh Student', uniqueEmail('fresh'), 'student');
     assert.equal(res.status, 201);
     assert.equal('claimedClasses' in res.body, false);
+  });
+});
+
+describe('the class code an invited student signs up with', () => {
+  const CODE_REQUIRED = 'Enter the class code your teacher gave you.';
+  const CODE_MISMATCH = "That code doesn't match your classes. Check it with your teacher.";
+  const refusal = (error: string) => ({ error, code: 'join_code_required', fields: { joinCode: error } });
+  let fx: ClassFixture;
+  let code: string;
+
+  before(async () => {
+    fx = await setupClass(srv, [], 'Coded class');
+    code = await joinCode(fx);
+  });
+
+  /** A refused sign-up changes nothing: the account is still pending, without a password. */
+  function assertStillPending(id: number) {
+    assert.deepEqual([userRow(id)?.pending, userRow(id)?.password_hash], [1, '']);
+  }
+
+  it('claims the account with its class’s code, in any case and with spaces or dashes', async () => {
+    const email = uniqueEmail('coded');
+    const student = await invite(fx, email);
+    const typed = ` ${code.slice(0, 3).toLowerCase()}-${code.slice(3)} `;
+    const res = await register('Coded Student', email, 'student', { joinCode: typed });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(res.body.user.id, student.id);
+    assert.deepEqual(res.body.claimedClasses, ['Coded class']);
+    assert.equal(userRow(student.id)?.pending, 0);
+  });
+
+  it('refuses a sign-up without the code', async () => {
+    const email = uniqueEmail('nocode');
+    const student = await invite(fx, email);
+    for (const missing of [undefined, '', ' - ']) {
+      const res = await register('No Code', email, 'student', { joinCode: missing });
+      assert.equal(res.status, 400);
+      assert.deepEqual(res.body, refusal(CODE_REQUIRED));
+    }
+    assertStillPending(student.id);
+    assert.equal((await login(email, 'my-password-1')).body.code, 'needs_signup');
+  });
+
+  it('refuses a wrong code and the code of a class the student is not in', async () => {
+    const email = uniqueEmail('wrongcode');
+    const student = await invite(fx, email);
+    const notTheirs = await joinCode(await setupClass(srv, [], 'Not their class'));
+    for (const wrong of ['000000', notTheirs]) {
+      const res = await register('Wrong Code', email, 'student', { joinCode: wrong });
+      assert.equal(res.status, 400);
+      assert.deepEqual(res.body, refusal(CODE_MISMATCH));
+    }
+    assertStillPending(student.id);
+    const res = await register('Wrong Code', email, 'student', { joinCode: code });
+    assert.equal(res.status, 201, 'the right code still works afterwards');
+  });
+
+  it('accepts the code of any of the student’s classes and brings all of them', async () => {
+    const other = await setupClass(srv, [], 'Second teacher class');
+    const email = uniqueEmail('twocodes');
+    const student = await invite(fx, email);
+    await invite(other, email);
+    const res = await register('Two Classes', email, 'student', { joinCode: await joinCode(other) });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(res.body.user.id, student.id);
+    assert.deepEqual(res.body.claimedClasses, ['Coded class', 'Second teacher class']);
+  });
+
+  it('needs no code for an account that is in no class', async () => {
+    const assignment = await createAssignment(srv, fx, { title: 'Kept for later' });
+    const email = uniqueEmail('noclass');
+    const student = await invite(fx, email);
+    expectOk(await submitRequest(srv, fx.teacher.token, assignment.id, PERFECT, { studentId: student.id }), 'upload');
+    assert.equal((await removeStudent(fx, student.id)).status, 200);
+    assert.equal(userRow(student.id)?.pending, 1, 'kept for its submission');
+
+    const res = await register('No Class', email, 'student');
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(res.body.user.id, student.id);
+    assert.deepEqual(res.body.claimedClasses, []);
+  });
+
+  it('ignores a code in a sign-up that matches no invited account', async () => {
+    const res = await register('Not Invited', uniqueEmail('notinvited'), 'student', { joinCode: code });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal('claimedClasses' in res.body, false);
+    const classes = await srv.request<ClassSummary[]>('GET', '/api/classes', { token: res.body.token });
+    assert.deepEqual(classes.body, [], 'the code does not join the class');
+  });
+
+  it('REQUIRE_CODE_FOR_INVITES=0 (or false, no, off) lets the email alone claim the account', async (t) => {
+    const saved = process.env.REQUIRE_CODE_FOR_INVITES;
+    t.after(() => {
+      if (saved === undefined) delete process.env.REQUIRE_CODE_FOR_INVITES;
+      else process.env.REQUIRE_CODE_FOR_INVITES = saved;
+    });
+
+    for (const on of ['1', 'yes', '']) {
+      process.env.REQUIRE_CODE_FOR_INVITES = on;
+      const email = uniqueEmail('switchon');
+      const student = await invite(fx, email);
+      assert.equal((await register('Switch On', email, 'student')).status, 400, `"${on}" keeps the check`);
+      assertStillPending(student.id);
+    }
+    for (const off of ['0', 'false', ' No ', 'OFF']) {
+      process.env.REQUIRE_CODE_FOR_INVITES = off;
+      const email = uniqueEmail('switchoff');
+      const student = await invite(fx, email);
+      const res = await register('Switch Off', email, 'student', { joinCode: off === '0' ? '000000' : undefined });
+      assert.equal(res.status, 201, `"${off}": ${JSON.stringify(res.body)}`);
+      assert.equal(res.body.user.id, student.id);
+      assert.deepEqual(res.body.claimedClasses, ['Coded class']);
+    }
   });
 });
 
@@ -309,21 +437,12 @@ describe('temporary passwords and removal for pending students', () => {
   it('does not delete students who signed up when they are removed', async () => {
     const email = uniqueEmail('signedup');
     const student = await invite(fx, email);
-    assert.equal((await register('Signed Up', email, 'student')).status, 201);
+    assert.equal((await register('Signed Up', email, 'student', { joinCode: await joinCode(fx) })).status, 201);
     assert.equal((await removeStudent(fx, student.id)).status, 200);
     assert.equal(userRow(student.id)?.pending, 0);
     assert.equal((await login(email, 'my-password-1')).status, 200);
   });
 });
-
-/** The class's join code, as its teacher sees it. */
-async function joinCode(fx: ClassFixture): Promise<string> {
-  const cls = expectOk(
-    await srv.request<ClassSummary>('GET', `/api/classes/${fx.classId}`, { token: fx.teacher.token }),
-    'class',
-  );
-  return cls.joinCode!;
-}
 
 describe('who controls an invited account after the student signs up', () => {
   it('the inviter can no longer reset the password once the student is in another teacher’s class', async () => {
@@ -335,7 +454,10 @@ describe('who controls an invited account after the student signs up', () => {
       dbm.get<{ c: number | null }>('SELECT created_by_teacher_id AS c FROM users WHERE id = ?', id)?.c;
     assert.equal(creatorOf(pending.id), inviter.teacher.id);
 
-    const signup = await register('Victim', email, 'student', 'victim-secret-1');
+    const signup = await register('Victim', email, 'student', {
+      password: 'victim-secret-1',
+      joinCode: await joinCode(inviter),
+    });
     assert.equal(signup.status, 201, JSON.stringify(signup.body));
     assert.equal(signup.body.user.id, pending.id);
     assert.equal(creatorOf(pending.id), null, 'the claim clears the creator');
@@ -363,7 +485,7 @@ describe('who controls an invited account after the student signs up', () => {
     const fx = await setupClass(srv, [], 'Only mine');
     const email = uniqueEmail('onlymine');
     const pending = await invite(fx, email);
-    assert.equal((await register('Only Mine', email, 'student')).status, 201);
+    assert.equal((await register('Only Mine', email, 'student', { joinCode: await joinCode(fx) })).status, 201);
     assert.equal((await roster(fx)).find((s) => s.id === pending.id)?.canResetPassword, true);
     assert.equal((await resetPassword(fx, pending.id)).status, 200);
   });
@@ -400,7 +522,7 @@ describe('names of invited accounts', () => {
     assert.equal(elsewhere.name, 'Kim', 'another teacher does not rename the account');
     assert.deepEqual([userRow(pending.id)?.name, userRow(pending.id)?.placeholder_name], ['Kim', 1]);
 
-    const signup = await register('Kim Real Name', email, 'student');
+    const signup = await register('Kim Real Name', email, 'student', { joinCode: await joinCode(other) });
     assert.equal(signup.status, 201);
     assert.equal(signup.body.user.name, 'Kim Real Name', 'the student’s own name replaces the placeholder');
   });
@@ -411,7 +533,7 @@ describe('names of invited accounts', () => {
     const pending = await invite(fx, email);
     assert.equal((await invite(fx, email, 'Lee Chang')).name, 'Lee Chang');
     assert.deepEqual([userRow(pending.id)?.name, userRow(pending.id)?.placeholder_name], ['Lee Chang', 0]);
-    const signup = await register('Somebody', email, 'student');
+    const signup = await register('Somebody', email, 'student', { joinCode: await joinCode(fx) });
     assert.equal(signup.body.user.name, 'Lee Chang');
   });
 });
@@ -419,6 +541,7 @@ describe('names of invited accounts', () => {
 describe('emails copied with invisible or look-alike characters', () => {
   it('invites and sign-ups normalize them to the same address', async () => {
     const fx = await setupClass(srv, [], 'Copied emails');
+    const code = await joinCode(fx);
     const at = `${++seq}@copied.example.test`;
     const cases = [
       { invited: `zw\u200bkid${at}`, typed: `zwkid${at}` },
@@ -429,7 +552,7 @@ describe('emails copied with invisible or look-alike characters', () => {
     for (const { invited, typed } of cases) {
       const student = await invite(fx, invited);
       assert.equal(student.email, typed.normalize('NFC'));
-      const res = await register('Copied', typed, 'student');
+      const res = await register('Copied', typed, 'student', { joinCode: code });
       assert.equal(res.status, 201, JSON.stringify(res.body));
       assert.equal(res.body.user.id, student.id, `${JSON.stringify(invited)} matched ${typed}`);
       assert.deepEqual(res.body.claimedClasses, ['Copied emails']);
@@ -455,7 +578,7 @@ describe('deleting a class with pending students', () => {
     await invite(other, twoClassesEmail);
     const signedUpEmail = uniqueEmail('signedup.del');
     const signedUp = await invite(fx, signedUpEmail);
-    assert.equal((await register('Signed Up', signedUpEmail, 'student')).status, 201);
+    assert.equal((await register('Signed Up', signedUpEmail, 'student', { joinCode: await joinCode(fx) })).status, 201);
 
     assert.equal((await deleteClass(fx)).status, 200);
     assert.equal(userRow(orphan.id), undefined);

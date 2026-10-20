@@ -95,7 +95,8 @@ export function AddStudentsResultModal({
           <Section title="Invited — waiting to sign up" count={invited.length} color="grape">
             <Text size="sm" c="dimmed">
               They're on your roster now, and you can already upload and grade work for them. When they create an
-              account with this email, they're matched automatically and see the class and their work.
+              account with this email (and the class code, which the instructions include), they're matched
+              automatically and see the class and their work.
             </Text>
             <StudentList students={invited.map((a) => a.student)} />
             <Group>

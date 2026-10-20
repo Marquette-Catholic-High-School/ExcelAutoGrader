@@ -42,6 +42,12 @@ export interface RegisterRequest {
   email: string;
   password: string;
   role: Role;
+  /**
+   * The join code of one of the student's classes. Needed (unless the server's REQUIRE_CODE_FOR_INVITES setting is
+   * off) only when the email belongs to a student a teacher added who has not signed up yet; ignored otherwise.
+   * Matched like JoinClassRequest.joinCode (any case, spaces and dashes ignored).
+   */
+  joinCode?: string;
 }
 
 export interface LoginRequest {
@@ -59,10 +65,13 @@ export interface ApiError {
   /** Optional field-level messages, keyed by request field name. */
   fields?: Record<string, string>;
   /**
-   * Optional machine-readable reason. Currently only `needs_signup`: login with an email a teacher added that has
-   * no account yet (the student should use "Create an account" with that email).
+   * Optional machine-readable reason:
+   * - `needs_signup`: login with an email a teacher added that has no account yet (the student should use "Create
+   *   an account" with that email).
+   * - `join_code_required`: register with such an email but without the code of one of the student's classes, or
+   *   with a code that matches none of them (`fields.joinCode` says which).
    */
-  code?: 'needs_signup';
+  code?: 'needs_signup' | 'join_code_required';
 }
 
 export interface OkResponse {

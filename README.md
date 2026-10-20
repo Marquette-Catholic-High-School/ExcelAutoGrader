@@ -15,8 +15,8 @@ runs on your own computer: no accounts in the cloud, no data leaves the machine.
 - **Classes and rosters.** Create classes, then add students by email: paste a list of names and
   emails, or upload a roster file (CSV, Excel or OpenDocument, such as an export from Google Classroom or
   your student information system). The app shows what it found in the file before anything is added.
-  Students don't need an account first: when a student signs up with the email you added, the app
-  matches them automatically, and they find their classes, and any work you uploaded for them, right
+  Students don't need an account first: when a student signs up with the email you added (and the
+  class code), the app matches them automatically, and they find their classes, and any work you uploaded for them, right
   away. Students can also register themselves and join with the class's 6-character join code. You can
   give a student a temporary password instead (or reset the password of a student you added, or of one
   who is only in your classes; a student who is also in another teacher's class changes it on their
@@ -134,6 +134,7 @@ Windows: `restart-app.cmd`):
 | `PORT` | `80` (Windows, Linux), `3001` (macOS) | The app's address is http://localhost:PORT (just http://localhost on port 80) |
 | `HOST` | `0.0.0.0` (Windows, Linux), `127.0.0.1` (macOS) | `127.0.0.1`: only this computer can open the app. `0.0.0.0`: other computers on the network can too, at http://this-computer's-name-or-IP:PORT. Anyone who can reach it can create an account, so only open it on a network you trust. |
 | `DATA_DIR` | `server/data` | Folder for the database and uploaded workbooks. A relative path is relative to the install folder; `~` means your home folder. |
+| `REQUIRE_CODE_FOR_INVITES` | `1` | `1`: a student you added by email signs up with that email **and** the class code (see [Adding students](#adding-students)). `0`: the email alone is enough. |
 
 `config.env`, `logs/` and the data folder are not part of the repository, so updates never touch them.
 
@@ -273,7 +274,7 @@ except Finn's and Grace's.
 | Student | Diego Ramirez | `diego@demo.test` | Two Monthly Budget attempts: a weak one on time, a better one a day **late** |
 | Student | Emma Wilson | `emma@demo.test` | Missed the Monthly Budget; finished the warm-up in Spreadsheet Skills |
 | Student | Finn Murphy | `finn@demo.test` | Added by email; the teacher then created a temporary password for him (printed by `npm run seed`). He must choose a new password at first sign-in (the app keeps him on the Account page until he does) |
-| Student | Grace Lee | `grace@demo.test` | Added by email, hasn't signed up yet: create an account with `grace@demo.test` (as a student, any password) and she lands in Business Computing 101 with the Monthly Budget the teacher uploaded for her, already graded |
+| Student | Grace Lee | `grace@demo.test` | Added by email, hasn't signed up yet: create an account with `grace@demo.test` (as a student, any password) and Business Computing 101's join code (printed by `npm run seed`) when asked, and she lands in that class with the Monthly Budget the teacher uploaded for her, already graded |
 
 The demo classes:
 
@@ -326,19 +327,25 @@ What happens next:
   lists and the gradebook (and its CSV export), and you can upload and grade work for them. Without a
   name, a stand-in is made from the email (`jane.doe@...` becomes "Jane Doe") and replaced by the name the
   student signs up with. **Copy sign-up instructions** (on the roster and after adding) gives you a short
-  message to send them: the app itself sends no email.
+  message to send them, with the class code: the app itself sends no email.
 - **When the student signs up** with that email (as a student; capitals and extra spaces don't matter),
-  the app matches them to it: they are in your classes immediately, with everything you uploaded for
-  them. Until then, signing in tells them to create their account first. A student who can't sign up can
-  get a temporary password from you instead.
+  the sign-up page asks for the class code, the same join code shown on the class page. With the code
+  of any class you (or another teacher) added them to, the app matches them to the account: they are in
+  all those classes immediately, with everything you uploaded for them. If you change the join code,
+  send the new one: instructions with the old code no longer work. Until they sign up, signing in tells
+  them to create their account first. A student who can't sign up can get a temporary password from you
+  instead.
 - **An existing student account** is added to the class right away. Teacher accounts can't be added.
 - **Removing** a student who never signed up and has no submissions deletes them completely, so the email
   can be added again from scratch. Deleting a class does the same for such students who were only in that
   class.
 - **Good to know:** the app can't check that an email address belongs to the person signing up with it.
-  Whoever signs up first with an email you added gets that student's place in your classes, the work you
-  uploaded for them and your feedback. Send sign-up instructions to the students' own addresses, and check
-  the roster after they sign up. If the wrong person took an account, **Reset password** on the roster
+  That's why it also asks for the class code: someone who only knows a student's email can't take their
+  place. But whoever signs up first with an email you added and the class code (a classmate, say) gets that
+  student's place in your classes, the work you uploaded for them and your feedback. Send sign-up
+  instructions to the students' own addresses, and check the roster after they sign up. A school that
+  prefers sign-up by email alone can set `REQUIRE_CODE_FOR_INVITES=0` in
+  [`config.env`](#settings-configenv). If the wrong person took an account, **Reset password** on the roster
   gives you a temporary password to hand to the real student (as long as the student isn't also in
   another teacher's class).
 

@@ -476,7 +476,7 @@ export async function seedDemoData(options: { quiet?: boolean } = {}): Promise<S
         email: grace.email,
         role: 'student',
         password: '(none yet)',
-        note: 'Added by email, has not signed up: choose "Create an account" with this email',
+        note: `Added by email, has not signed up: "Create an account" with this email and code ${bc101.joinCode}`,
       },
     ],
     joinCodes: [bc101, skills].map(({ name, joinCode }) => ({ name, joinCode })),

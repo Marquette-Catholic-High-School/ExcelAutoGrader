@@ -66,8 +66,8 @@ function NeedsSignupAlert({ email }: { email: string }) {
     <Alert color="grape" variant="light" icon={<IconMailForward />} title="Create your account first">
       <Stack gap="sm" align="flex-start">
         <Text size="sm">
-          Your teacher added <b>{email}</b> to a class, but there's no account for it yet. Sign up with this email and
-          you'll be placed in your classes automatically.
+          Your teacher added <b>{email}</b> to a class, but there's no account for it yet. Sign up with this email (and
+          your class code, if asked) and you'll be placed in your classes automatically.
         </Text>
         <Button
           component={Link}

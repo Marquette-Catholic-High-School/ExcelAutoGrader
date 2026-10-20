@@ -55,6 +55,16 @@ General rules
   is in). With `role: "teacher"` →
   `409 { error: "A teacher added this email as a student. Sign up as a student to join your classes.",
   fields: { email } }`. A *non-pending* existing account → `409` duplicate as before.
+- Class code for a pending claim: the claim also needs `joinCode`, the join code of one of the classes the pending
+  account is enrolled in (matched like `/api/classes/join`: any case, spaces and dashes ignored). One matching code
+  claims the account with all its classes. Missing → `400 { error: "Enter the class code your teacher gave you.",
+  code: "join_code_required", fields: { joinCode } }`; a code that matches none of its classes (wrong, or another
+  class's) → the same with `"That code doesn't match your classes. Check it with your teacher."`. Nothing changes
+  on a refusal, and the account can still be claimed. A pending account in no class (removed from all of them but
+  kept for its submissions) needs no code. `joinCode` is ignored in every other sign-up (it does not join a class).
+  The check runs after the `role: "teacher"` refusal above. Setting `REQUIRE_CODE_FOR_INVITES` to `0`, `false`,
+  `no` or `off` (in `config.env`, read on every request) turns it off: the email alone claims the account. Any other
+  value, or none, keeps it on.
 - change-password: wrong current password → `400 { fields: { currentPassword } }`; new password ≥ 8 chars.
 
 ## Classes & students — `server/src/routes/classes.ts`
@@ -104,8 +114,10 @@ General rules
 - Removing a pending student from a class, or deleting a class, also deletes each pending account it leaves with
   no class and no submissions (nothing to keep; the email is free again, also for a teacher sign-up). Accounts
   that have signed up are always kept.
-- There is no email verification: the first person to sign up as a student with an invited email takes over that
-  account, with its classes, the work the teacher uploaded and its feedback. A teacher who sees a wrong account
+- There is no email verification: the first person to sign up as a student with an invited email and the code of
+  one of its classes (just the email when `REQUIRE_CODE_FOR_INVITES` is off) takes over that account, with its
+  classes, the work the teacher uploaded and its feedback. The code keeps out people outside the class, not
+  classmates who know it. A teacher who sees a wrong account
   can use reset-password (allowed while the student is in no other teacher's class) and give the temporary
   password to the real student.
 - reset-password: only for students enrolled in that class (else `404`), **and** only when the calling teacher

@@ -5,6 +5,7 @@ import { notifications } from '@mantine/notifications';
 import { IconAlertCircle, IconUserPlus } from '@tabler/icons-react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import type { Role } from '@shared/types';
+import { ApiRequestError } from '../../api/client';
 import { useAuth } from '../../auth/AuthContext';
 import { errorMessage, fieldErrors } from '../../utils/errors';
 import { usePageTitle } from '../../utils/usePageTitle';
@@ -15,6 +16,8 @@ interface RegisterValues {
   name: string;
   email: string;
   password: string;
+  /** Asked for only after the server says the email belongs to an invited student (join_code_required). */
+  joinCode: string;
 }
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = [
@@ -26,6 +29,8 @@ const ROLE_HINT: Record<Role, string> = {
   teacher: 'Create classes, post assignments with an answer key, and let the autograder check the work.',
   student: "Join your teacher's class with a 6-character code and get instant feedback on your workbooks.",
 };
+
+const CODE_HINT = "Your teacher added this email to a class. Enter the class's 6-character code to confirm it's you.";
 
 /** Router state for links to /register, such as the login page's "Create your account" (kept out of the URL). */
 export interface RegisterPrefill {
@@ -51,6 +56,7 @@ function notifyClaimedClasses(name: string, classNames: string[]) {
 export function RegisterPage() {
   const { register } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const [askCode, setAskCode] = useState(false);
   // Prefilled from links such as the login page's "Create your account" (?role=student, email in router state).
   const [params] = useSearchParams();
   const roleParam = params.get('role');
@@ -63,6 +69,7 @@ export function RegisterPage() {
       name: '',
       email: typeof prefill.email === 'string' ? prefill.email.trim() : '',
       password: '',
+      joinCode: '',
     },
     validate: {
       name: (value) => {
@@ -83,9 +90,11 @@ export function RegisterPage() {
         ...values,
         name: values.name.trim(),
         email: values.email.trim(),
+        joinCode: values.joinCode.trim() || undefined,
       });
       if (claimedClasses.length > 0) notifyClaimedClasses(user.name, claimedClasses);
     } catch (err) {
+      if (err instanceof ApiRequestError && err.code === 'join_code_required') setAskCode(true);
       const fields = fieldErrors(err);
       if (Object.keys(fields).length > 0) form.setErrors(fields);
       else setError(errorMessage(err));
@@ -131,7 +140,8 @@ export function RegisterPage() {
             </Text>
             {role === 'student' && (
               <Text size="xs" ta="center" fw={500}>
-                Added by your teacher? Sign up with the same email and you'll be placed in your classes automatically.
+                Added by your teacher? Sign up with the same email (and your class code, if asked) and you'll be
+                placed in your classes automatically.
               </Text>
             )}
           </Stack>
@@ -151,6 +161,20 @@ export function RegisterPage() {
             required
             {...form.getInputProps('email')}
           />
+          {role === 'student' && askCode && (
+            <TextInput
+              label="Class code"
+              description={CODE_HINT}
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              // Mounts after the server asks for the code, so this moves the cursor to it.
+              autoFocus
+              required
+              styles={{ input: { textTransform: 'uppercase', fontFamily: 'var(--mantine-font-family-monospace)' } }}
+              {...form.getInputProps('joinCode')}
+            />
+          )}
           <PasswordInput
             label="Password"
             description="At least 8 characters"

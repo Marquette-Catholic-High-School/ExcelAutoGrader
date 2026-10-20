@@ -16,6 +16,7 @@ import { fileBlob, startTestServer, type TestServer } from '../test-utils.js';
 let srv: TestServer;
 let seed: typeof import('./seed.js');
 let finnPassword: string;
+let bc101Code: string;
 
 async function login(email: string, password = 'password123'): Promise<string> {
   const res = await srv.request<AuthResponse>('POST', '/api/auth/login', { json: { email, password } });
@@ -36,6 +37,7 @@ before(async () => {
   seed = await import('./seed.js');
   const result = await seed.seedDemoData({ quiet: true });
   finnPassword = result.accounts.find((a) => a.email === 'finn@demo.test')!.password;
+  bc101Code = result.joinCodes.find((c) => c.name === 'Business Computing 101')!.joinCode;
 });
 
 after(() => srv.close());
@@ -182,7 +184,7 @@ describe('demo seed', () => {
     );
   });
 
-  test('Grace signs up with her email and finds her class and the work the teacher uploaded', async () => {
+  test('Grace signs up with her email and class code and finds her class and the teacher’s upload', async () => {
     const before = await srv.request('POST', '/api/auth/login', {
       json: { email: 'grace@demo.test', password: 'password123' },
     });
@@ -190,7 +192,13 @@ describe('demo seed', () => {
     assert.equal(before.body.code, 'needs_signup');
 
     const res = await srv.request<AuthResponse>('POST', '/api/auth/register', {
-      json: { name: 'Grace Lee', email: 'grace@demo.test', password: 'grace-password', role: 'student' },
+      json: {
+        name: 'Grace Lee',
+        email: 'grace@demo.test',
+        password: 'grace-password',
+        role: 'student',
+        joinCode: bc101Code,
+      },
     });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.deepEqual(res.body.claimedClasses, ['Business Computing 101']);

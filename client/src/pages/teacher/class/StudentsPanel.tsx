@@ -178,8 +178,8 @@ function PendingInfo({ cls, count }: { cls: ClassSummary; count: number }) {
       <Group justify="space-between" gap="sm" wrap="wrap">
         <Text size="sm" style={{ flex: '1 1 320px' }}>
           {count === 1 ? "1 invited student hasn't" : `${count} invited students haven't`} signed up yet. They're
-          matched automatically when they create an account with the email you added, and you can upload work for
-          them in the meantime.
+          matched automatically when they create an account with the email you added (and the class code, which the
+          instructions include). You can upload work for them in the meantime.
         </Text>
         <CopyInstructionsButton cls={cls} />
       </Group>

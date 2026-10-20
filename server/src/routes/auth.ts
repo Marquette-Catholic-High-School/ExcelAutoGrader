@@ -19,6 +19,7 @@ import {
   jsonBody,
   NAME_MAX_LENGTH,
   normalizeEmail,
+  normalizeJoinCode,
   validationError,
 } from '../services/classes.js';
 
@@ -30,6 +31,8 @@ const NEEDS_SIGNUP =
   "Your teacher added this email, but you haven't created your account yet. Choose “Create an account” and sign " +
   'up with this email.';
 const INVITED_AS_STUDENT = 'A teacher added this email as a student. Sign up as a student to join your classes.';
+const CODE_REQUIRED = 'Enter the class code your teacher gave you.';
+const CODE_MISMATCH = "That code doesn't match your classes. Check it with your teacher.";
 
 const router = Router();
 
@@ -57,7 +60,7 @@ function parseRegistration(body: Record<string, unknown>): RegisterRequest {
   if (role !== 'teacher' && role !== 'student') fields.role = 'Choose whether you are a teacher or a student.';
 
   if (Object.keys(fields).length > 0) throw validationError(fields);
-  return { name, email, password, role: role as RegisterRequest['role'] };
+  return { name, email, password, role: role as RegisterRequest['role'], joinCode: normalizeJoinCode(body.joinCode) };
 }
 
 function loadUser(id: number): UserRow {
@@ -82,6 +85,31 @@ function classNames(studentId: number): string[] {
      WHERE e.student_id = ? ORDER BY e.joined_at, c.id`,
     studentId,
   ).map((row) => row.name);
+}
+
+/** REQUIRE_CODE_FOR_INVITES (config.env): on unless set to 0, false, no or off. Read per request. */
+function inviteCodeRequired(): boolean {
+  const value = (process.env.REQUIRE_CODE_FOR_INVITES ?? '').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(value);
+}
+
+/**
+ * The app can't verify emails, so claiming an invited account also takes the join code of one of its classes:
+ * knowing a student's email is not enough to get their classes, the teacher's uploads and feedback. An account in
+ * no class (removed from all of them but kept for its submissions) has no code to match and nothing the student
+ * could see, so it needs none.
+ */
+function checkInviteCode(pendingId: number, joinCode: string | undefined): void {
+  if (!inviteCodeRequired()) return;
+  const codes = all<{ join_code: string }>(
+    'SELECT c.join_code FROM enrollments e JOIN classes c ON c.id = e.class_id WHERE e.student_id = ?',
+    pendingId,
+  ).map((row) => row.join_code);
+  if (codes.length === 0) return;
+  if (!joinCode) throw new HttpError(400, CODE_REQUIRED, { joinCode: CODE_REQUIRED }, 'join_code_required');
+  if (!codes.includes(joinCode)) {
+    throw new HttpError(400, CODE_MISMATCH, { joinCode: CODE_MISMATCH }, 'join_code_required');
+  }
 }
 
 /**
@@ -113,6 +141,7 @@ router.post('/api/auth/register', (req, res) => {
   const existing = findUserByEmail(input.email);
   if (existing?.pending) {
     if (input.role !== 'student') throw new HttpError(409, INVITED_AS_STUDENT, { email: INVITED_AS_STUDENT });
+    checkInviteCode(existing.id, input.joinCode);
     const claimed: AuthResponse = claimPendingAccount(existing.id, input);
     res.status(201).json(claimed);
     return;

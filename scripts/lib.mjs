@@ -382,6 +382,11 @@ HOST=${DEFAULT_HOST}
 # Folder for the database and uploaded workbooks. Leave empty to use server/data inside the install folder.
 # A relative path is relative to the install folder; ~ means your home folder.
 DATA_DIR=
+
+# 1 = a student a teacher added by email signs up with that email and the class code (the app can't check
+#     that an email belongs to the person signing up, so the code keeps others from taking the student's place).
+# 0 = the email alone is enough.
+REQUIRE_CODE_FOR_INVITES=1
 `;
 
 /** Parses config.env (KEY=VALUE lines, # comments). Missing file → {}. */
@@ -597,6 +602,7 @@ function serverEnv(config, instance) {
     PORT: config.PORT || DEFAULT_PORT,
     HOST: config.HOST || DEFAULT_HOST,
     DATA_DIR: dataDir(config),
+    REQUIRE_CODE_FOR_INVITES: config.REQUIRE_CODE_FOR_INVITES || '1',
     EXCEL_AUTOGRADER_INSTANCE: instance,
   };
   delete env.EXCEL_AUTOGRADER_LOCK;

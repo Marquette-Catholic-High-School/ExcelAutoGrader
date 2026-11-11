@@ -8,6 +8,8 @@ import classesRouter from './routes/classes.js';
 import assignmentsRouter from './routes/assignments.js';
 import submissionsRouter from './routes/submissions.js';
 import gradebookRouter from './routes/gradebook.js';
+import notificationsRouter from './routes/notifications.js';
+import reportsRouter from './routes/reports.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(here, '../../client/dist');
@@ -29,6 +31,8 @@ export function createApp() {
   app.use(assignmentsRouter);
   app.use(submissionsRouter);
   app.use(gradebookRouter);
+  app.use(notificationsRouter);
+  app.use(reportsRouter);
 
   app.use('/api', (_req, _res, next) => next(notFound('No such API endpoint.')));
 

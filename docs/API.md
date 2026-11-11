@@ -240,3 +240,63 @@ These are the grading semantics both the grader and the UI copy/README must desc
   XML far beyond that) is rejected as unreadable → `400 { error }` with a "too large" explanation. Recalculation work
   is bounded by the populated area, so a tiny file with `=SUM(A1:XFD1048576)` cannot exhaust memory.
 - **Semicolon CSVs** (`sep=;` or `;` delimiter, as saved by European-locale Excel) read `,` as the decimal separator.
+
+## Reports (PDF) — `server/src/routes/reports.ts`
+
+All teacher-only (owner of the class). Responses are `application/pdf` attachments with a descriptive filename
+(e.g. `Monthly Budget - Business Computing 101.pdf`, `Ava Thompson - Business Computing 101.pdf`). Unicode names
+(José, Nguyễn, Zoë) must render correctly (embed a Unicode font; never the 14 standard PDF fonts).
+
+| Method & path | Response |
+|---|---|
+| `GET /api/reports/assignments/:assignmentId.pdf` | Assignment report: header (class, teacher, due date, points, grading mode, generated time), summary (enrolled, submitted, on time, late, missing, needs grading; average, median, high, low as points and %), a score distribution chart (10% bands), a table of every enrolled student (name, status, submitted at, late by, attempts, score, %), and for autograded assignments the most-missed cells (sheet!cell, % of submissions wrong, expected value/formula), top 15. Invited students who haven't signed up are marked. |
+| `GET /api/reports/classes/:classId/students/:studentId.pdf` | Student report for one enrolled student: header (student, email, class, teacher, generated time), summary (overall % over graded work, completed x of y, late count, missing count, average on autograded work), and a table of every assignment in due-date order (title, due, submitted, status, late flag, score / points, %), followed by the teacher's feedback per assignment. `404` if the student isn't enrolled. |
+| `GET /api/reports/classes/:classId/students.pdf` | The same student report for every enrolled student, one after another, each starting on a new page (for printing or parent conferences). |
+| `GET /api/reports/classes/:classId/gradebook.pdf` | Class gradebook on landscape pages: students × assignments (final score, LATE, missing), totals and class averages per assignment. |
+
+## Email — `server/src/routes/notifications.ts`, `server/src/services/email/`
+
+Email goes out through SMTP (Cloudflare Email Service: `smtp.mx.cloudflare.net:465`, implicit TLS, username
+`api_token`, password = Cloudflare API token) configured by environment variables that the start scripts pass from
+`config.env`: `CLOUDFLARE_API_TOKEN` (empty = email off), `EMAIL_FROM_NAME` (default `Podner's Excel`),
+`EMAIL_FROM_ADDRESS` (default `noreply@mchstech.org`), `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` (defaults as above),
+`APP_URL` (links in emails), `TIME_ZONE` (IANA name; default the computer's). `EMAIL_TRANSPORT=memory|log` exists
+for tests/development (no real sending). The token is never returned by any endpoint or written to logs.
+
+| Method & path | Who | Body | Response |
+|---|---|---|---|
+| `GET /api/email/status` | signed in | – | `EmailStatus` |
+| `GET /api/classes/:classId/notifications` | teacher | – | `ClassNotificationSettings` |
+| `PUT /api/classes/:classId/notifications` | teacher | partial `ClassNotificationSettings` (remindersSince ignored) | `ClassNotificationSettings` (validated; out-of-range → `400 { fields }`) |
+| `GET /api/classes/:classId/emails?limit=100` | teacher | – | `EmailLogEntry[]` for that class (newest first, limit 1–500) |
+| `GET /api/me/notifications` | signed in | – | `MyNotificationSettings` |
+| `PUT /api/me/notifications` | signed in | partial `MyNotificationSettings` | `MyNotificationSettings` (`dailyReportTime` must be HH:MM) |
+| `POST /api/me/test-email` | teacher | – | `TestEmailResponse` — sends now (not queued) to the teacher's own address; `503 { error }` when email isn't configured, `502 { error }` with the mail server's message when sending fails |
+| `POST /api/me/daily-report` | teacher | – | `TestEmailResponse` — sends the teacher's daily report now (doesn't affect the scheduled one) |
+
+Rules
+
+- Sending never blocks a request: messages are written to an outbox table and a background worker in the server
+  sends them (a few per second at most), retrying temporary failures (SMTP 4xx, network) with backoff up to 5
+  attempts; permanent failures (5xx) are marked `failed` with the server's message. Nothing is queued while email
+  isn't configured.
+- Receipts: after every successful submission upload (student or teacher on behalf) when the class has
+  `submissionReceipts` on and the student hasn't opted out. Content: assignment, class, attempt number, submitted
+  time, LATE flag (with how late), who uploaded it, the autograde score when there is one (respecting nothing hidden:
+  the score is always visible to students), and a link. Invited students who haven't signed up also get sign-up steps
+  (link to `/register`, their email, the class code when `REQUIRE_CODE_FOR_INVITES` is on).
+- Overdue reminders: a scheduler checks every few minutes. For each class with `overdueReminders` on, each assignment
+  due after `remindersSince` and at least `firstReminderAfterHours` ago, each enrolled student with no submission
+  (pending students only if `includePendingStudents`), not opted out: send if fewer than `maxReminders` reminders
+  were sent for that student and assignment and the last one was at least `reminderIntervalDays` days ago. Stops as
+  soon as the student submits. Content: assignment, class, due date, how overdue, that late work is still accepted,
+  link (and sign-up steps for pending students).
+- Daily report: once per local day per teacher with `dailyReport` on, at or after `dailyReportTime` in `TIME_ZONE`
+  (a server that was off catches up once that day, never twice). Content per class: submissions since the previous
+  report (student, assignment, time, score, LATE), work needing grading, assignments due in the next 7 days with
+  submitted x/y, overdue assignments with the names of students still missing. With `skipEmptyReports` and nothing
+  new, nothing is sent.
+- Each email has HTML and plain-text parts, the from name/address above, and a footer saying why it was sent (and,
+  for students, that they can turn emails off on their Account page). Header values are sanitized (no CR/LF from
+  names or titles).
+

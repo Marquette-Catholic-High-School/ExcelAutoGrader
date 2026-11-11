@@ -514,3 +514,87 @@ export interface WorkbookData {
   fileName: string;
   sheets: ViewerSheet[];
 }
+
+/* ------------------------------------------------------------------ */
+/* Email notifications                                                */
+/* ------------------------------------------------------------------ */
+
+/** GET /api/email/status — whether this server can send email (never includes the API token). */
+export interface EmailStatus {
+  /** True when an SMTP password (Cloudflare API token) is configured. */
+  configured: boolean;
+  fromName: string;
+  fromAddress: string;
+  /** IANA time zone used for the daily report time and reminder schedule, e.g. "America/Chicago". */
+  timeZone: string;
+  /** Address used for links in emails (APP_URL), or null if the server falls back to a guess. */
+  appUrl: string | null;
+}
+
+/** Per-class email settings, chosen by the class's teacher (GET/PUT /api/classes/:classId/notifications). */
+export interface ClassNotificationSettings {
+  /** Email the student a receipt whenever work is submitted (by them or by the teacher for them). Default true. */
+  submissionReceipts: boolean;
+  /** Email students who have not submitted once an assignment is overdue. Default true. */
+  overdueReminders: boolean;
+  /** Hours after the due date before the first reminder (0–168). Default 12. */
+  firstReminderAfterHours: number;
+  /** Days between reminders (1–14). Default 2. */
+  reminderIntervalDays: number;
+  /** Most reminders one student gets for one assignment (1–10). Default 3. */
+  maxReminders: number;
+  /** Also email invited students who haven't signed up (their emails include sign-up steps). Default true. */
+  includePendingStudents: boolean;
+  /**
+   * Read-only: reminders are only sent for assignments due after this moment (when the settings were created), so
+   * turning the feature on never emails students about long-past assignments.
+   */
+  remindersSince: string;
+}
+
+export const DEFAULT_CLASS_NOTIFICATION_SETTINGS: Omit<ClassNotificationSettings, 'remindersSince'> = {
+  submissionReceipts: true,
+  overdueReminders: true,
+  firstReminderAfterHours: 12,
+  reminderIntervalDays: 2,
+  maxReminders: 3,
+  includePendingStudents: true,
+};
+
+/** The signed-in user's own email settings (GET/PUT /api/me/notifications). */
+export interface MyNotificationSettings {
+  /** Students: true turns off receipts and reminders for this account. Teachers: ignored. Default false. */
+  emailOptOut: boolean;
+  /** Teachers only: the daily report about their classes. Default true. */
+  dailyReport: boolean;
+  /** Teachers only: local time "HH:MM" (24h, in EmailStatus.timeZone) to send the daily report. Default "07:00". */
+  dailyReportTime: string;
+  /** Teachers only: skip the daily report on days with nothing new to report. Default false. */
+  skipEmptyReports: boolean;
+}
+
+export type EmailKind = 'receipt' | 'overdue' | 'daily_report' | 'test';
+export type EmailState = 'queued' | 'sent' | 'failed';
+
+/** One row of a class's email log (GET /api/classes/:classId/emails), newest first. */
+export interface EmailLogEntry {
+  id: number;
+  kind: EmailKind;
+  toName: string;
+  toAddress: string;
+  subject: string;
+  state: EmailState;
+  /** Attempts made so far (failed sends are retried a few times). */
+  attempts: number;
+  /** Last error message from the mail server, if any. */
+  error: string | null;
+  assignmentId: number | null;
+  assignmentTitle: string | null;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+export interface TestEmailResponse {
+  ok: true;
+  to: string;
+}

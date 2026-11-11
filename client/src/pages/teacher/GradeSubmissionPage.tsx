@@ -5,6 +5,7 @@ import {
   IconArrowRight,
   IconChevronLeft,
   IconChevronRight,
+  IconFileTypePdf,
   IconHistory,
   IconPointer,
   IconUserOff,
@@ -19,6 +20,7 @@ import { PageHeader } from '../../components/PageHeader';
 import { ErrorAlert, PageLoader } from '../../components/QueryState';
 import type { CellFocus } from '../../components/SpreadsheetViewer';
 import { LateAlert, LateBadge, PendingBadge, TeacherStatusBadge } from '../../components/StatusBadges';
+import { useDownload } from '../../utils/download';
 import { formatDateTime, isPast } from '../../utils/format';
 import { parseId } from '../../utils/params';
 import { usePageTitle } from '../../utils/usePageTitle';
@@ -99,6 +101,11 @@ function GradeWorkspace({
   const nextNeeds = findNextNeedsGrading(rows, index);
   const saveNextTarget = nextNeeds ?? next;
 
+  const studentReport = useDownload(
+    () => endpoints.downloadStudentReport(assignment.classId, studentId),
+    'Could not create the report',
+  );
+
   const latest = attempts[0] ?? null;
   const selected = attempts.find((s) => s.id === selectedId) ?? latest;
   const viewingOlder = !!selected && !!latest && selected.id !== latest.id;
@@ -153,6 +160,18 @@ function GradeWorkspace({
 
   const navControls = (
     <Group gap="xs" wrap="wrap">
+      {row && (
+        <Tooltip label={`Every assignment in ${assignment.className} for ${studentName}, as a PDF`}>
+          <Button
+            variant="subtle"
+            leftSection={<IconFileTypePdf size={16} />}
+            loading={studentReport.pending}
+            onClick={studentReport.start}
+          >
+            Student report
+          </Button>
+        </Tooltip>
+      )}
       {attempts.length > 1 && selected && (
         <Select
           aria-label="Attempt"

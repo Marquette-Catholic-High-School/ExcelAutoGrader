@@ -22,6 +22,7 @@ import { PageHeader } from '../components/PageHeader';
 import { fieldErrors, notifyError, notifySuccess } from '../utils/errors';
 import { formatDateTime } from '../utils/format';
 import { usePageTitle } from '../utils/usePageTitle';
+import { EmailPreferences } from './account/EmailPreferences';
 
 interface PasswordValues {
   currentPassword: string;
@@ -151,7 +152,7 @@ export function AccountPage() {
     <>
       <PageHeader
         title="Account"
-        subtitle="Your profile and sign-in details."
+        subtitle="Your profile, sign-in and email settings."
         crumbs={[{ label: 'Dashboard', to: homeFor(user.role) }, { label: 'Account' }]}
       />
       {user.mustChangePassword && (
@@ -167,6 +168,12 @@ export function AccountPage() {
         <Grid.Col span={{ base: 12, md: 7 }} order={{ base: 1, md: 2 }}>
           <ChangePasswordCard />
         </Grid.Col>
+        {/* Kept out of the way until a temporary password is replaced. */}
+        {!user.mustChangePassword && (
+          <Grid.Col span={12} order={3}>
+            <EmailPreferences />
+          </Grid.Col>
+        )}
       </Grid>
     </>
   );

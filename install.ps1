@@ -6,9 +6,10 @@
 #     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Marquette-Catholic-High-School/ExcelAutoGrader/main/install.ps1))) --demo --port 8080
 #
 #   Already downloaded: double-click install.cmd, or in the folder run
-#     powershell -ExecutionPolicy Bypass -File .\install.ps1 [--demo] [--no-demo] [--port <n>] [--host <ip>] [--start] [--no-start] [--yes]
+#     powershell -ExecutionPolicy Bypass -File .\install.ps1 [--demo] [--no-demo] [--port <n>] [--host <ip>] [--start] [--no-start] [--no-email-setup] [--yes]
 #
-#   Environment overrides: EXCEL_AUTOGRADER_DIR (install folder), EXCEL_AUTOGRADER_REPO, EXCEL_AUTOGRADER_BRANCH
+#   Environment overrides: EXCEL_AUTOGRADER_DIR (install folder), EXCEL_AUTOGRADER_REPO, EXCEL_AUTOGRADER_BRANCH,
+#   CLOUDFLARE_API_TOKEN (turns on email without asking for the token)
 #   (Keep this file ASCII-only: Windows PowerShell 5.1 misreads UTF-8 files without a BOM.)
 
 function Install-ExcelAutograder {
@@ -43,12 +44,16 @@ function Install-ExcelAutograder {
         Write-Host '  --host <ip>      0.0.0.0 (other computers on the network too, default) or 127.0.0.1 (this computer only)'
         Write-Host '  --start          start the app at the end without asking'
         Write-Host '  --no-start       do not start the app at the end'
-        Write-Host '  --yes            use the defaults without asking any questions'
+        Write-Host '  --no-email-setup do not ask for the Cloudflare API token that turns on email (later: email-setup.cmd)'
+        Write-Host '  --yes            use the defaults without asking any questions (email stays off unless'
+        Write-Host '                   CLOUDFLARE_API_TOKEN is set)'
         Write-Host ''
         Write-Host 'Environment variables:'
         Write-Host '  EXCEL_AUTOGRADER_DIR     folder to install into (default: %USERPROFILE%\ExcelAutoGrader)'
         Write-Host '  EXCEL_AUTOGRADER_REPO    git repository to download from'
         Write-Host '  EXCEL_AUTOGRADER_BRANCH  branch to download (default: main)'
+        Write-Host '  CLOUDFLARE_API_TOKEN     Cloudflare API token for email, saved in config.env without asking (for'
+        Write-Host '                           unattended installs; without it the installer asks, and Enter skips)'
     }
 
     function Update-SessionPath {
@@ -97,7 +102,7 @@ function Install-ExcelAutograder {
     }
 
     # 0. Options: --help, and mistyped options are caught before anything is downloaded.
-    $known = @('--demo', '--no-demo', '--start', '--no-start', '--yes', '-y')
+    $known = @('--demo', '--no-demo', '--start', '--no-start', '--no-email-setup', '--yes', '-y')
     for ($i = 0; $i -lt $SetupArgs.Count; $i++) {
         $arg = $SetupArgs[$i]
         if (($arg -ceq '--help') -or ($arg -ceq '-h')) {

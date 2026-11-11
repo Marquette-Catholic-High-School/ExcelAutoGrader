@@ -10,7 +10,12 @@
  *                    127.0.0.1 (this computer only; default on macOS)
  *   --start          start the app at the end without asking (default when it was already running)
  *   --no-start       don't start the app at the end
- *   --yes            accept the defaults without asking
+ *   --no-email-setup don't ask for the Cloudflare API token that turns on email (set it up later with
+ *                    npm run email-setup; Windows: email-setup.cmd)
+ *   --yes            accept the defaults without asking (email stays off unless CLOUDFLARE_API_TOKEN is set)
+ *
+ * Email: when no token is saved yet, it asks for one (Enter skips). For unattended installs, put the token in the
+ * CLOUDFLARE_API_TOKEN environment variable instead; it is saved in config.env.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -36,6 +41,7 @@ import {
   confirm,
   dataDir,
   dim,
+  ensureConfigFile,
   ensureOwner,
   git,
   firewallCommands,
@@ -59,9 +65,10 @@ import {
   warn,
   writeConfig,
 } from './lib.mjs';
+import { emailConfigured, emailOffNote, emailSetupMode, optionalEmailSetup } from './email.mjs';
 
 function parseArgs(argv) {
-  const options = { demo: undefined, start: undefined, yes: false, port: undefined, host: undefined };
+  const options = { demo: undefined, start: undefined, yes: false, port: undefined, host: undefined, emailSetup: true };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => {
@@ -73,6 +80,7 @@ function parseArgs(argv) {
     else if (arg === '--no-demo') options.demo = false;
     else if (arg === '--start') options.start = true;
     else if (arg === '--no-start') options.start = false;
+    else if (arg === '--no-email-setup') options.emailSetup = false;
     else if (arg === '--yes' || arg === '-y') options.yes = true;
     else if (arg === '--port') options.port = validatePort(value());
     else if (arg === '--host') options.host = value();
@@ -251,16 +259,18 @@ runMain(async () => {
     );
     host = network ? '0.0.0.0' : '127.0.0.1';
   }
-  const config = writeConfig({ PORT: options.port, HOST: host });
+  const { added } = ensureConfigFile();
+  let config = writeConfig({ PORT: options.port, HOST: host });
   const port = config.PORT || DEFAULT_PORT;
   success(
     `${existed ? 'Using' : 'Created'} ${path.relative(ROOT, CONFIG_FILE)}: port ${port}, ` +
       `${isNetworkHost(config.HOST) ? 'open to your network' : 'this computer only'}.`,
   );
+  if (added.length) info(`Added new settings to config.env (your other settings are unchanged): ${added.join(', ')}.`);
   if (existed && options.port === undefined && port !== DEFAULT_PORT) {
     info(dim(`New installs here use port ${DEFAULT_PORT}. To switch this copy, run the installer with --port ${DEFAULT_PORT}.`));
   }
-  info(dim('Edit config.env to change the port, network access or data folder.'));
+  info(dim('Edit config.env to change the port, network access, data folder or email settings.'));
 
   step('Building the web app');
   buildClient();
@@ -304,6 +314,16 @@ runMain(async () => {
   const portReady = await preparePort(config, ask);
   if (!IS_WINDOWS && portReady) await openFirewall(config, ask);
 
+  step('Email');
+  const emailMode = emailSetupMode({ yes: options.yes, skip: !options.emailSetup });
+  if (emailConfigured(config)) {
+    success(`Email is on (the Cloudflare API token is saved in config.env). To change it: ${COMMANDS.emailSetup}`);
+  } else if (!emailMode) {
+    info(emailOffNote());
+  } else if (await optionalEmailSetup(emailMode)) {
+    config = readConfig();
+  }
+
   step('Starting Excel Autograder');
   let started = false;
   if (!portReady) {
@@ -345,10 +365,13 @@ runMain(async () => {
     [COMMANDS.stop, 'stop'],
     [COMMANDS.status, 'is it running?'],
     [COMMANDS.update, 'get the latest version from GitHub'],
+    [COMMANDS.emailSetup, 'turn email on, or change or test its settings'],
   ];
   const width = Math.max(...rows.map(([command]) => command.length)) + 2;
   for (const [command, what] of rows) console.log(`    ${bold(command.padEnd(width))}${what}`);
-  if (IS_WINDOWS) console.log(dim('  (You can also double-click start-app.cmd, stop-app.cmd and update.cmd in that folder.)'));
+  if (IS_WINDOWS) {
+    console.log(dim('  (You can also double-click start-app.cmd, stop-app.cmd, update.cmd and email-setup.cmd there.)'));
+  }
   console.log(dim(`\n  Folder: ${ROOT}`));
   console.log(dim(`  The app does not start by itself after the computer restarts; run ${COMMANDS.start} again.\n`));
 });

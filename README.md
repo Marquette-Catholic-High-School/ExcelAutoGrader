@@ -6,7 +6,8 @@ teacher's finished workbook (the answer key). Assignments without an answer key 
 with the student's workbook viewable right in the browser.
 
 Built with React and Mantine UI on the front end, and Express with SQLite on the back end. Everything
-runs on your own computer: no accounts in the cloud, no data leaves the machine.
+runs on your own computer: no accounts in the cloud. Nothing leaves the machine except email, if you turn
+it on (it is sent through Cloudflare; see [Email notifications](#email-notifications)).
 
 ## Features
 
@@ -38,6 +39,12 @@ runs on your own computer: no accounts in the cloud, no data leaves the machine.
 - **Late work.** Submissions are always accepted, but anything turned in after the due date carries a
   clear LATE flag everywhere you view or grade it, and the grading page shows how late it was.
 - **Gradebook.** Every student and assignment in one table, with CSV export for your school's system.
+- **PDF reports.** Export a report for an assignment (summary, score distribution, every student's result,
+  most-missed cells), for one student (every assignment with scores and your feedback), for every student
+  of a class at once, or the whole gradebook. See [Reports (PDF)](#reports-pdf).
+- **Email notifications.** Students get a receipt when work is submitted and reminders when an assignment
+  is overdue; you choose per class whether, when and how often. You get a daily report about your
+  classes. Sent through Cloudflare Email Service; see [Email notifications](#email-notifications).
 - **Re-grading.** Change the answer key, starter file, settings or points and every submission is
   re-graded at once.
 
@@ -48,6 +55,8 @@ runs on your own computer: no accounts in the cloud, no data leaves the machine.
 - Download the starter file, upload your workbook, and get your score immediately on autograded work,
   with a cell-by-cell report when the teacher allows it.
 - Re-submit as often as you like before (or after) the due date; the latest attempt counts.
+- When the school has turned email on: a receipt for every submission and a reminder about overdue work
+  (each student can turn these off on their Account page).
 
 ## Requirements
 
@@ -61,7 +70,8 @@ winget on Windows).
 ## Install
 
 The installer downloads the app from GitHub, installs its dependencies, builds the web app, asks whether
-to load demo data, and starts it.
+to load demo data, asks for the Cloudflare API token that turns on email (press Enter to skip; see
+[Email notifications](#email-notifications)), and starts it.
 
 - **Windows and Linux**: the app is hosted on **port 80** for your network. Open **http://localhost** on that
   computer. From other computers use **http://computer-name** if your network knows the name, or the
@@ -103,7 +113,8 @@ Installer options (add them after `./install.sh`, after `install.cmd` in a termi
 | `--host <ip>` | `0.0.0.0`: other computers on your network can open the app (default on Windows and Linux). `127.0.0.1`: only this computer (default on macOS) |
 | `--start` | Start the app at the end without asking |
 | `--no-start` | Don't start the app at the end |
-| `--yes` | Use the defaults without asking any questions |
+| `--no-email-setup` | Don't ask for the Cloudflare API token; email stays off until you run `npm run email-setup` (Windows: `email-setup.cmd`) |
+| `--yes` | Use the defaults without asking any questions. Email stays off, unless the token is in the `CLOUDFLARE_API_TOKEN` environment variable (see [Setting up email](#setting-up-email-cloudflare)) |
 | `--help` | Show the options (nothing is downloaded) |
 
 ## Running the installed app
@@ -119,6 +130,7 @@ blocks npm's own script there (use `npm.cmd start` if you prefer npm).
 | `npm restart` | `restart-app.cmd` | Restarts it (needed after editing `config.env`) |
 | `npm run status` | `status-app.cmd` | Shows whether it is running (exit code 0: running, 3: not running) |
 | `npm run serve` | `npm.cmd run serve` | Runs it in the terminal window instead (Ctrl+C stops it) |
+| `npm run email-setup` | `email-setup.cmd` | Turns email on (asks for the Cloudflare API token), or changes, tests or removes the token; restarts the app if it is running |
 
 The server's output goes to `logs/server.log`. The app does not start by itself when the computer
 restarts; start it again (or add the start command to your computer's startup tasks). If the port is
@@ -135,8 +147,21 @@ Windows: `restart-app.cmd`):
 | `HOST` | `0.0.0.0` (Windows, Linux), `127.0.0.1` (macOS) | `127.0.0.1`: only this computer can open the app. `0.0.0.0`: other computers on the network can too, at http://this-computer's-name-or-IP:PORT. Anyone who can reach it can create an account, so only open it on a network you trust. |
 | `DATA_DIR` | `server/data` | Folder for the database and uploaded workbooks. A relative path is relative to the install folder; `~` means your home folder. |
 | `REQUIRE_CODE_FOR_INVITES` | `1` | `1`: a student you added by email signs up with that email **and** the class code (see [Adding students](#adding-students)). `0`: the email alone is enough. |
+| `CLOUDFLARE_API_TOKEN` | empty | The Cloudflare API token that sends email (needs the "Email Sending: Edit" permission). Empty: the app sends no email. Set it with `npm run email-setup` rather than by hand. **Keep `config.env` private** while it holds a token. |
+| `EMAIL_FROM_NAME` | `Podner's Excel` | Sender name on every email (no quotes needed) |
+| `EMAIL_FROM_ADDRESS` | `noreply@mchstech.org` | Sender address. Its domain must be onboarded for Email Sending in Cloudflare. |
+| `SMTP_HOST` | `smtp.mx.cloudflare.net` | Cloudflare's mail server |
+| `SMTP_PORT` | `465` | Cloudflare only accepts port 465 (TLS from the start; 587/STARTTLS is not supported) |
+| `SMTP_USER` | `api_token` | The user name, literally `api_token`; the token is the password |
+| `APP_URL` | empty | The address students use to open the app, for the links in emails, e.g. `http://grading-pc` or `https://grader.mchstech.org`. Empty: a guess from this computer's name. |
+| `TIME_ZONE` | empty | Time zone for the daily report time and reminders, e.g. `America/Chicago`. Empty: this computer's time zone (Linux servers are often set to UTC; check with `timedatectl`). |
+| `EMAIL_DAILY_LIMIT` | empty (2000) | Most emails the app sends in 24 hours. A guard against floods (see [Limits and unsubscribing](#limits-and-unsubscribing)). |
+| `PDF_FALLBACK_FONTS` | empty | Not in `config.env` by default; add it if needed. Font files (separated by `:`, on Windows `;`) for names in scripts the PDF font lacks, see [Reports (PDF)](#reports-pdf). |
 
-`config.env`, `logs/` and the data folder are not part of the repository, so updates never touch them.
+`config.env`, `logs/` and the data folder are not part of the repository, so updates never replace them.
+The installer and the update add settings that are new in a version to an existing `config.env` (with
+their explanations), without changing the values already there. On macOS and Linux they also make the
+file readable by its owner only (`chmod 600`), because it can hold the API token.
 
 ### Port 80 and network access
 
@@ -163,10 +188,10 @@ computer's name alone, e.g. **http://grading-pc**, with no port number. During i
 - **macOS**: keeps port 3001 for this computer only. Port 80 also works on a Mac, but only together with
   `HOST=0.0.0.0`.
 
-**Copies installed before port 80 became the default** keep their port, because updates never change
-`config.env`. To switch one, run its installer again with `--port 80 --host 0.0.0.0` (on Windows, in a
-terminal in the install folder: `install.cmd --port 80 --host 0.0.0.0`), which also sets up the firewall
-or permission. Or edit `config.env` yourself and restart the app.
+**Copies installed before port 80 became the default** keep their port, because updates never change the
+values in `config.env`. To switch one, run its installer again with `--port 80 --host 0.0.0.0` (on
+Windows, in a terminal in the install folder: `install.cmd --port 80 --host 0.0.0.0`), which also sets up
+the firewall or permission. Or edit `config.env` yourself and restart the app.
 
 To keep the app private to one computer instead, install with `--host 127.0.0.1` (and any port), or set
 `HOST=127.0.0.1` in `config.env`. Anyone who can reach the app can create an account, so only open it on a
@@ -183,16 +208,24 @@ When a new version is pushed to GitHub, update an installed copy with:
 The update script:
 
 1. Checks GitHub for a new version. If there is none, it stops there.
-2. Downloads it, reinstalls dependencies if they changed (the app is stopped for that), and builds the new
-   web app next to the current one while the app keeps running.
-3. Stops the app, backs up the database to `<data folder>/backups/` (the newest 10 backups are kept),
-   switches to the new web app and starts the new version, if the app was running.
+2. Downloads it and adds settings that are new in this version to `config.env` (your values are kept).
+   While email is off and you are at the terminal, it asks for the **Cloudflare API token** that turns it
+   on: paste it and press Enter (nothing shows while you type or paste; that is on purpose), or just press
+   Enter to skip. It then checks the token with Cloudflare, asks for the address students use to open the
+   app and the time zone, and offers to send a test email. See [Setting up email](#setting-up-email-cloudflare).
+   The app keeps running while the update waits for your answer.
+3. Reinstalls dependencies if they changed (the app is stopped for that), and builds the new web app next
+   to the current one.
+4. Stops the app, backs up the database to `<data folder>/backups/` (the newest 10 backups are kept),
+   switches to the new web app and starts the new version with the new settings, if the app was running.
 
 If any step fails, it puts the previous version back and starts it again. If the new version had already
-started (and so may have changed the database), the database is put back from the backup made in step 3.
-`config.env` and the data folder are never part of an update: an update that would overwrite them is
-refused. Only one install or update runs at a time; a second one stops with a message (so do the start and
-stop commands while an update runs).
+started (and so may have changed the database), the database is put back from the backup made in step 4.
+`config.env` and the data folder are never downloaded: an update that would overwrite them is refused.
+If an update is cut off halfway (the SSH session or terminal closed, the computer restarted), just run the
+update again: it finishes the cut-off update first (installing, building and starting the new version).
+Only one install or update runs at a time; a second one stops with a message (so do the start and stop
+commands while an update runs).
 
 | Option | What it does |
 |---|---|
@@ -201,10 +234,12 @@ stop commands while an update runs).
 | `--no-restart` | Leave the running app alone; restart it yourself soon (ignored when dependencies change) |
 | `--discard-changes` | Move edits made to the app's own files in the install folder (and files in the way of new ones) into `logs/discarded-<time>/`; the update refuses to run while there are any |
 | `--reset-to-github` | Switch to GitHub's version even though this copy has commits GitHub doesn't have, for example after GitHub's history was rewritten |
-| `--yes` | Don't ask questions (needed with `--discard-changes` and `--reset-to-github` when there is no terminal) |
+| `--no-email-setup` | Don't ask for the Cloudflare API token (prints "Email is off; run npm run email-setup to turn it on" instead). **The first update from a version without email doesn't know this option yet** and stops with "Unknown option": for that update use `EXCEL_AUTOGRADER_EMAIL_SETUP=skip ./update.sh` (Windows PowerShell: `$env:EXCEL_AUTOGRADER_EMAIL_SETUP='skip'; .\update.ps1`), `--yes`, or just press Enter at the question. From then on the option works. |
+| `--yes` | Don't ask questions (needed with `--discard-changes` and `--reset-to-github` when there is no terminal). Email stays as it is, unless email is off and the token is in the `CLOUDFLARE_API_TOKEN` environment variable, which is then saved |
 
 **Updating automatically.** The update script does nothing when there is no new version, so it is safe
-to run on a schedule.
+to run on a schedule. Scheduled runs never wait for the token question (there is no terminal, and the
+examples pass `--yes`).
 
 - macOS/Linux, every night at 2 AM: run `crontab -e` and add (with your install folder; cron has a
   minimal PATH, so include the folder that contains `node`, `npm` and `git`):
@@ -327,7 +362,9 @@ What happens next:
   lists and the gradebook (and its CSV export), and you can upload and grade work for them. Without a
   name, a stand-in is made from the email (`jane.doe@...` becomes "Jane Doe") and replaced by the name the
   student signs up with. **Copy sign-up instructions** (on the roster and after adding) gives you a short
-  message to send them, with the class code: the app itself sends no email.
+  message to send them, with the class code: the app sends no invitations itself. (With
+  [email](#email-notifications) on, the receipts and overdue reminders such students get include the
+  sign-up steps.)
 - **When the student signs up** with that email (as a student; capitals and extra spaces don't matter),
   the sign-up page asks for the class code, the same join code shown on the class page. With the code
   of any class you (or another teacher) added them to, the app matches them to the account: they are in
@@ -348,6 +385,137 @@ What happens next:
   [`config.env`](#settings-configenv). If the wrong person took an account, **Reset password** on the roster
   gives you a temporary password to hand to the real student (as long as the student isn't also in
   another teacher's class).
+
+## Reports (PDF)
+
+Teachers can export these PDFs (ready to print or to share at a parent conference; names in any language
+print correctly):
+
+| Report | Where | What it contains |
+|---|---|---|
+| **Assignment report** | An assignment's page: **Export PDF** | Class, teacher, due date, points and grading mode; how many students are enrolled, submitted, on time, late, missing and waiting for grading; average, median, high and low score; a score distribution chart; every enrolled student with status, submission time, how late, attempts and score; for autograded work, the 15 most-missed cells with the expected value or formula. Invited students who haven't signed up are marked. |
+| **Student report** | A class's **Students** tab: the **⋯** menu next to a student > **Download report (PDF)**; or **Student report** on the grading page | The student's overall percentage on graded work, completed x of y, late and missing counts, the average on autograded work, then every assignment of the class in due-date order (due, submitted, status, LATE, score, %), followed by your feedback on each. |
+| **All student reports** | A class's **Gradebook** tab: **All student reports (PDF)** | The student report for every student of the class in one file, each starting on a new page. |
+| **Gradebook** | A class's **Gradebook** tab: **Export PDF** | Students × assignments on landscape pages (final score, LATE, missing), with totals and class averages. |
+
+Reports are made in the background (a big class's report never slows the app down for anyone else). A
+teacher can have two reports in progress at a time; when many are being made at once the app asks you to
+try again in a minute.
+
+**Names in other scripts.** The PDFs use the Roboto font, which covers Latin (José, Zoë, Łukasz),
+Vietnamese (Nguyễn Thị Hương), Greek and Cyrillic. Chinese, Japanese, Korean, Arabic, Hebrew, Thai or
+Devanagari names are printed with a font installed on the server: on Ubuntu run
+`sudo apt install fonts-noto-cjk fonts-noto-core` and restart the app (Windows and macOS already have
+suitable fonts). Without one, those characters print as `?` and the app's log says which font is missing.
+To use a specific font file, set `PDF_FALLBACK_FONTS=/path/to/font.ttf` in `config.env`.
+
+## Email notifications
+
+With email turned on (see [Setting up email](#setting-up-email-cloudflare)), the app sends:
+
+- **Submission receipts** to the student, after every upload (by the student, or by you on their behalf):
+  assignment, class, attempt number, time, a LATE flag with how late, the autograde score when there is
+  one, and a link to the assignment.
+- **Overdue reminders** to students who haven't submitted an assignment after its due date. They stop as
+  soon as the student submits, and say that late work is still accepted.
+- **A daily report** to each teacher: new submissions since the last report (with scores and LATE flags),
+  work waiting for grading, assignments due in the next 7 days with how many have submitted, and overdue
+  assignments with the names of the students still missing.
+
+Invited students who haven't signed up yet get the sign-up steps in their emails (with the class code when
+`REQUIRE_CODE_FOR_INVITES` is on). Every email comes from `"Podner's Excel" <noreply@mchstech.org>`
+(`EMAIL_FROM_NAME` / `EMAIL_FROM_ADDRESS` in `config.env`) and says why it was sent.
+
+**Per class** (open the class, **Settings** tab, **Email notifications**), the teacher chooses:
+
+| Setting | Default |
+|---|---|
+| Send submission receipts | On |
+| Remind students about overdue work | On |
+| First reminder: hours after the due date (0–168) | 12 |
+| Then every: days between reminders (1–14) | 2 |
+| At most: reminders per student, per assignment (1–10) | 3 |
+| Include students who haven't signed up | On |
+
+Receipts and reminders are on for every class by default once email is on; turn them off per class if you
+don't want them. Reminders are only sent for assignments due after this version was installed (or after
+the class was created, reminders were last turned back on, or email was turned on after running without a
+token), so students are never reminded about long-past work. The **Email log** on the same tab lists every email for the class with its status
+(queued, sent or failed, with the mail server's message).
+
+**Daily report** (your **Account** page): on by default at 07:00, in the server's time zone (`TIME_ZONE`);
+choose the time, or skip days with nothing new. **Send me a test email** and **Send today's report now**
+are on the same page. Students can turn their own emails off on their Account page.
+
+Emails are sent in the background: a submission never waits for email. Temporary problems (the mail
+server busy, the network down) are retried a few times; the Email log shows what failed.
+
+#### Limits and unsubscribing
+
+The app can't check that an email address belongs to the person who typed it (anyone who can open the app
+can create an account, also a teacher account, and teachers add students by email). So that nobody can use
+the app to flood people from your domain:
+
+- Every email except the test email has an **unsubscribe link** (and the `List-Unsubscribe` header, so mail
+  apps show their own Unsubscribe button). It works without signing in, also for invited students who never
+  signed up, and stops every email to that address; students can turn emails back on on their Account page.
+- In 24 hours, one address gets at most **50** emails (`ana+1@…` and, for Gmail, `a.na@…` count as the same
+  address); one teacher's classes send at most **1000**, of them at most **300** to invited students who
+  haven't signed up; and the whole app sends at most **2000** (`EMAIL_DAILY_LIMIT` in `config.env`).
+  Emails over a limit are not sent, and the app's log says so.
+- **Send me a test email** and **Send today's report now** work 5 times in 10 minutes, one at a time.
+
+If students on your network could create teacher accounts you don't want, keep `HOST=127.0.0.1` or limit
+who can reach the app (see [Port 80 and network access](#port-80-and-network-access)).
+
+### Setting up email (Cloudflare)
+
+The app sends through **Cloudflare Email Service** over SMTP: `smtp.mx.cloudflare.net`, port 465 with TLS,
+user name `api_token`, and a Cloudflare API token as the password.
+
+1. In the Cloudflare dashboard, **onboard `mchstech.org` for Email Sending** (the domain of the sender
+   address; Cloudflare adds the DNS records it needs). Without this every email is refused.
+2. **Create an API token** (dashboard > My Profile > API Tokens > Create Token) with the
+   **Email Sending: Edit** permission. Copy it; Cloudflare shows it only once.
+3. On the computer running the app, in the install folder, run **`./update.sh`** (it asks while email is
+   off) or **`npm run email-setup`** (Windows: double-click `email-setup.cmd`). Paste the token and press
+   Enter; nothing appears while you paste, on purpose. The script checks the token with Cloudflare, asks
+   for the address students use to open the app (saved as `APP_URL`, for the links in emails) and the time
+   zone (`TIME_ZONE`), offers to send a test email, and restarts the app if it is running.
+
+The installer asks the same question (Enter skips; `--no-email-setup` skips it without asking). For an
+unattended install or update, put the token in the `CLOUDFLARE_API_TOKEN` environment variable instead,
+without typing it into the command line (so it stays out of the shell history):
+
+```bash
+read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN   # paste the token, press Enter
+./install.sh --yes                                            # or ./update.sh --yes
+```
+
+**Where the token is kept.** In `config.env` in the install folder (`CLOUDFLARE_API_TOKEN=...`). That file
+is never part of the repository, of updates or of backups, and on macOS and Linux it is readable only by
+the account that runs the app (`chmod 600`). On Windows, keep the install folder inside that account's own
+user folder (the default). Anyone with the token can send email as `mchstech.org`, so don't share
+`config.env` or paste the token into chats or tickets. The scripts never print it. To replace it (for
+example after revoking it in Cloudflare), run `npm run email-setup` and choose **change**; **remove** turns
+email off again.
+
+**Troubleshooting.** `npm run email-setup` (choose **test**) and the Account page's **Send me a test email**
+show the mail server's answer. What the usual ones mean:
+
+| Message | What to do |
+|---|---|
+| `535 5.7.8` / "did not accept the token" | The token is wrong, incomplete, expired or revoked, or lacks the **Email Sending: Edit** permission. Create a new one and run `npm run email-setup`. |
+| `550 5.7.1` / "refused the sender" | `mchstech.org` (the domain of `EMAIL_FROM_ADDRESS`) is not onboarded for Email Sending in Cloudflare, or the address is mistyped. |
+| "Could not reach smtp.mx.cloudflare.net on port 465" (timeout, refused) | This computer can't connect out to port 465: a firewall or the school's network blocks it. Check with `nc -vz smtp.mx.cloudflare.net 465` and ask the network administrator to allow it. Port 587 does not work with Cloudflare. |
+| `421`, `451`, `452` | Temporary (Cloudflare busy or limiting). The app retries by itself; the test can simply be repeated later. |
+| `554` | Refused by Cloudflare's sending policy: check the Email Sending page of the dashboard (limits, account status). |
+| "Could not set up a secure connection" | `SMTP_PORT` must be 465. A network filter that inspects encrypted traffic can cause it too. |
+| Links in emails point to the wrong address | Set `APP_URL` in `config.env` (or run `npm run email-setup` again), then restart the app. |
+| The daily report comes at the wrong hour | Set `TIME_ZONE` (e.g. `America/Chicago`) in `config.env`, then restart the app. |
+| Nothing is sent at all | Is a token saved (`npm run email-setup` says so), and was the app restarted since? Are receipts and reminders on in the class's Settings tab, and has the student not turned emails off? |
+
+After editing `config.env` by hand, restart the app (`npm restart`; Windows: `restart-app.cmd`).
 
 ## How autograding works
 
@@ -454,8 +622,8 @@ Excel Autograder/
 ├── server/                Express API (TypeScript, run with tsx)
 │   ├── data/              Database and uploaded files (created on first run; not in version control)
 │   └── src/
-│       ├── routes/        HTTP endpoints: auth, classes, assignments, submissions, gradebook
-│       ├── services/      Business logic shared by the routes
+│       ├── routes/        HTTP endpoints: auth, classes, assignments, submissions, gradebook, reports, email
+│       ├── services/      Business logic shared by the routes (including email/ and the PDF reports/)
 │       ├── grader/        The spreadsheet engine: reading, recalculation, cell selection, comparison
 │       ├── demo/          Demo data and workbooks used by the seed
 │       ├── db.ts          SQLite schema and helpers
@@ -463,10 +631,10 @@ Excel Autograder/
 ├── shared/types.ts        Request and response types shared by client and server
 ├── docs/API.md            The HTTP API contract
 ├── samples/               Example workbooks to upload by hand
-├── scripts/               Install, update, start/stop, backup and restore logic (plain Node, same on every OS)
+├── scripts/               Install, update, start/stop, email setup, backup and restore logic (plain Node, same on every OS)
 ├── install.sh / .ps1 / .cmd   Installers for macOS/Linux and Windows
 ├── update.sh / .ps1 / .cmd    Updaters for macOS/Linux and Windows
-└── start-app.cmd, stop-app.cmd, restart-app.cmd, status-app.cmd   Windows shortcuts for npm start/stop/...
+└── start-app.cmd, stop-app.cmd, restart-app.cmd, status-app.cmd, email-setup.cmd   Windows shortcuts for npm start/stop/...
 ```
 
 ## Scripts
@@ -480,6 +648,7 @@ Run these from the project folder:
 | `npm start` / `npm stop` / `npm restart` / `npm run status` | Run the installed app in the background (see above) |
 | `npm run serve` | Run the installed app in this terminal |
 | `npm run update` | Update from GitHub (same as `update.sh` / `update.cmd`) |
+| `npm run email-setup` | Turn email on, or change, test or remove the Cloudflare API token (Windows: `email-setup.cmd`) |
 | `npm run backup` / `npm run restore` | Back up the database and uploads / put a backup back (see above) |
 | `npm run seed` | Deletes all data and creates the demo data (asks first when there are real accounts; in an installed copy it backs everything up first). Add `-- --samples` to also rewrite `samples/` |
 | `npm test` | Runs the server test suite (Node's built-in test runner) |
@@ -507,6 +676,8 @@ Development settings, through environment variables (the installed app uses `con
 |---|---|---|
 | `DATA_DIR` | `server/data` | Where the database and uploads live (a relative path is relative to the project folder) |
 | `API_PORT` | `3001` | API port for `npm run dev` (also change the proxy in `client/vite.config.ts`) |
+| `EMAIL_TRANSPORT` | `smtp` | `log`: write emails to the server's output instead of sending them; `memory`: keep them in memory (tests). Both still need some value in `CLOUDFLARE_API_TOKEN` to count as configured. |
+| `CLOUDFLARE_API_TOKEN`, `EMAIL_FROM_NAME`, ... | see [Settings](#settings-configenv) | The email settings, with the same names as in `config.env` |
 
 By default the app only listens on 127.0.0.1 (this computer). Passwords are stored as salted scrypt
 hashes, and sign-in sessions last 30 days.

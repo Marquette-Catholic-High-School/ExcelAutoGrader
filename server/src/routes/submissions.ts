@@ -8,6 +8,7 @@ import { getFile, saveFileRecord, sendFile, upload } from '../uploads.js';
 import { assignmentWithClass, classRoster, toAssignmentDetail } from '../services/assignments.js';
 import { round2 } from '../services/common.js';
 import { readConfig } from '../services/config.js';
+import { enqueueReceipt } from '../services/email/notifications.js';
 import { autoGrade } from '../services/grading.js';
 import {
   attemptRows,
@@ -155,6 +156,7 @@ router.post(
       ).lastInsertRowid;
     });
     uploads.keep(file);
+    enqueueReceipt(submissionId);
     res.json(detailFor(submissionId, assignment, isTeacher ? 'teacher' : 'student'));
   }),
 );

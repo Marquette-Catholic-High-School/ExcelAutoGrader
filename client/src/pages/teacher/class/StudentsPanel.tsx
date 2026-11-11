@@ -19,6 +19,7 @@ import {
 } from '@mantine/core';
 import {
   IconDots,
+  IconFileTypePdf,
   IconKey,
   IconMailForward,
   IconSearch,
@@ -33,6 +34,7 @@ import { ApiRequestError } from '../../../api/client';
 import { endpoints, qk } from '../../../api/endpoints';
 import { QueryState } from '../../../components/QueryState';
 import { BADGE_NO_SHRINK, PendingBadge } from '../../../components/StatusBadges';
+import { downloadWithProgress } from '../../../utils/download';
 import { notifyError, notifySuccess } from '../../../utils/errors';
 import { formatDateTime, fromNow } from '../../../utils/format';
 import { AddStudentsModal } from './AddStudentsModal';
@@ -91,10 +93,12 @@ function StatusBadge({ student }: { student: StudentInfo }) {
 
 function StudentRow({
   student,
+  onReport,
   onReset,
   onRemove,
 }: {
   student: StudentInfo;
+  onReport: (s: StudentInfo) => void;
   onReset: (s: StudentInfo) => void;
   onRemove: (s: StudentInfo) => void;
 }) {
@@ -137,6 +141,10 @@ function StudentRow({
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown>
+            <Menu.Item leftSection={<IconFileTypePdf size={16} />} onClick={() => onReport(student)}>
+              Download report (PDF)
+            </Menu.Item>
+            <Menu.Divider />
             <Menu.Item
               leftSection={<IconKey size={16} />}
               disabled={!canReset}
@@ -246,6 +254,14 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
     });
   }
 
+  function downloadReport(student: StudentInfo) {
+    void downloadWithProgress(
+      `Report for ${student.name}`,
+      () => endpoints.downloadStudentReport(cls.id, student.id),
+      'Could not create the report',
+    );
+  }
+
   function confirmRemove(student: StudentInfo) {
     confirmAction({
       title: `Remove ${student.name} from ${cls.name}?`,
@@ -325,7 +341,13 @@ export function StudentsPanel({ cls }: { cls: ClassSummary }) {
                     </Table.Thead>
                     <Table.Tbody>
                       {visible.map((s) => (
-                        <StudentRow key={s.id} student={s} onReset={confirmReset} onRemove={confirmRemove} />
+                        <StudentRow
+                          key={s.id}
+                          student={s}
+                          onReport={downloadReport}
+                          onReset={confirmReset}
+                          onRemove={confirmRemove}
+                        />
                       ))}
                       {visible.length === 0 && (
                         <Table.Tr>

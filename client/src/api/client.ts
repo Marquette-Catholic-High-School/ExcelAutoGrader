@@ -83,6 +83,7 @@ export const api = {
   get: <T>(path: string) => json<T>('GET', path),
   post: <T>(path: string, body?: unknown) => json<T>('POST', path, body),
   patch: <T>(path: string, body?: unknown) => json<T>('PATCH', path, body),
+  put: <T>(path: string, body?: unknown) => json<T>('PUT', path, body),
   delete: <T>(path: string) => json<T>('DELETE', path),
   /** multipart upload; method defaults to POST */
   upload: <T>(path: string, form: FormData, method: 'POST' | 'PATCH' = 'POST') => json<T>(method, path, form),

@@ -12,7 +12,8 @@ General rules
   malformed JSON, a body that doesn't decode with its `Content-Encoding` (e.g. "gzip" over plain text), or an
   incomplete/malformed multipart upload → `400`; an unsupported charset or `Content-Encoding` → `415`.
   Any error object carrying a numeric 4xx `status`/`statusCode` keeps that status. Only unexpected failures are `500`.
-- Auth: `Authorization: Bearer <token>` on every endpoint except register/login/health. `401` when missing or
+- Auth: `Authorization: Bearer <token>` on every endpoint except register/login/health and the email unsubscribe
+  pages. `401` when missing or
   expired, `403` when signed in but not allowed, `404` when the resource does not exist. 401 messages: no token →
   "Please sign in."; an unknown or signed-out token → "Please sign in again."; a session that existed but expired →
   "Your session has expired. Please sign in again."
@@ -254,6 +255,13 @@ All teacher-only (owner of the class). Responses are `application/pdf` attachmen
 | `GET /api/reports/classes/:classId/students.pdf` | The same student report for every enrolled student, one after another, each starting on a new page (for printing or parent conferences). |
 | `GET /api/reports/classes/:classId/gradebook.pdf` | Class gradebook on landscape pages: students × assignments (final score, LATE, missing), totals and class averages per assignment. |
 
+- PDFs are laid out in worker threads, never on the thread that answers requests. A user with two reports in
+  progress gets `429 { error }`; when the workers and their queue are full, `503 { error }` (try again shortly).
+- Averages and their percentages are computed from the unrounded mean (as the app's gradebook does); only the
+  displayed numbers are rounded.
+- Characters Roboto lacks (CJK, Arabic, Hebrew, Thai, ...) use a fallback font from `PDF_FALLBACK_FONTS` or the
+  system fonts; characters no font has print as `?`, never as empty boxes.
+
 ## Email — `server/src/routes/notifications.ts`, `server/src/services/email/`
 
 Email goes out through SMTP (Cloudflare Email Service: `smtp.mx.cloudflare.net:465`, implicit TLS, username
@@ -273,6 +281,11 @@ for tests/development (no real sending). The token is never returned by any endp
 | `PUT /api/me/notifications` | signed in | partial `MyNotificationSettings` | `MyNotificationSettings` (`dailyReportTime` must be HH:MM) |
 | `POST /api/me/test-email` | teacher | – | `TestEmailResponse` — sends now (not queued) to the teacher's own address; `503 { error }` when email isn't configured, `502 { error }` with the mail server's message when sending fails |
 | `POST /api/me/daily-report` | teacher | – | `TestEmailResponse` — sends the teacher's daily report now (doesn't affect the scheduled one) |
+| `GET /api/email/unsubscribe/:token` | anyone (no auth) | – | HTML page asking to confirm (the masked address and an Unsubscribe button); changes nothing, so link scanners can't unsubscribe anyone. Unknown token → `404` HTML page |
+| `POST /api/email/unsubscribe/:token` | anyone (no auth) | any (RFC 8058 one-click sends `List-Unsubscribe=One-Click`) | HTML page "You're unsubscribed". Unknown token → `404` HTML page |
+
+On-demand sends (test email, report now): at most 5 per teacher in 10 minutes and one at a time per teacher (a
+second request while one is in progress → `429`); a daily limit reached → `429 { error }`.
 
 Rules
 
@@ -281,22 +294,40 @@ Rules
   attempts; permanent failures (5xx) are marked `failed` with the server's message. Nothing is queued while email
   isn't configured.
 - Receipts: after every successful submission upload (student or teacher on behalf) when the class has
-  `submissionReceipts` on and the student hasn't opted out. Content: assignment, class, attempt number, submitted
+  `submissionReceipts` on, the student hasn't opted out or unsubscribed, and (for an invited student who hasn't
+  signed up) the class has `includePendingStudents` on. Content: assignment, class, attempt number, submitted
   time, LATE flag (with how late), who uploaded it, the autograde score when there is one (respecting nothing hidden:
   the score is always visible to students), and a link. Invited students who haven't signed up also get sign-up steps
   (link to `/register`, their email, the class code when `REQUIRE_CODE_FOR_INVITES` is on).
 - Overdue reminders: a scheduler checks every few minutes. For each class with `overdueReminders` on, each assignment
-  due after `remindersSince` and at least `firstReminderAfterHours` ago, each enrolled student with no submission
+  due after `remindersSince` (and after email was turned on, when the server ran without a token before: the first
+  scheduler run that finds a token records that moment) and at least `firstReminderAfterHours` ago, each enrolled student with no submission
   (pending students only if `includePendingStudents`), not opted out: send if fewer than `maxReminders` reminders
   were sent for that student and assignment and the last one was at least `reminderIntervalDays` days ago. Stops as
   soon as the student submits. Content: assignment, class, due date, how overdue, that late work is still accepted,
   link (and sign-up steps for pending students).
 - Daily report: once per local day per teacher with `dailyReport` on, at or after `dailyReportTime` in `TIME_ZONE`
   (a server that was off catches up once that day, never twice). Content per class: submissions since the previous
-  report (student, assignment, time, score, LATE), work needing grading, assignments due in the next 7 days with
+  report (student, assignment, time, score, LATE; also uploads that started before the previous report but were
+  saved after it), work needing grading, assignments due in the next 7 days with
   submitted x/y, overdue assignments with the names of students still missing. With `skipEmptyReports` and nothing
-  new, nothing is sent.
+  new, nothing is sent (and the next report starts from that moment).
 - Each email has HTML and plain-text parts, the from name/address above, and a footer saying why it was sent (and,
   for students, that they can turn emails off on their Account page). Header values are sanitized (no CR/LF from
   names or titles).
+- Unsubscribing: every email except the test email has a footer link and `List-Unsubscribe` /
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers pointing to `/api/email/unsubscribe/:token` (one
+  random token per mailbox, kept). Unsubscribing stops every queued email kind to that mailbox (also for an invited
+  student who never signs up, and across removing and re-inviting), sets `emailOptOut` for student accounts and
+  turns teachers' `dailyReport` off; `PUT /api/me/notifications` turning `emailOptOut` off (students) or
+  `dailyReport` on (teachers) takes the address off the list. `GET /api/me/notifications` reports an unsubscribed
+  address as `emailOptOut: true` / `dailyReport: false`.
+- Daily limits (rolling 24 hours; emails over a limit are not queued or sent, and the server log says why): 50 per
+  mailbox (lower-cased, `+tag` removed, Gmail dots ignored), 1000 receipts and reminders per teacher's classes (300
+  of them to invited students who haven't signed up), and `EMAIL_DAILY_LIMIT` (default 2000) for the whole server.
+  Deleting a class or its log rows does not reset the counts.
+- A queued email is dropped instead of sent when it no longer applies at send time: the mailbox unsubscribed; the
+  student opted out, left the class or was removed (an invited student's account is deleted); the class turned
+  that kind of email or `includePendingStudents` off; for a reminder, the student submitted or the assignment is
+  no longer past due; for a daily report, the teacher turned it off.
 

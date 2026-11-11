@@ -9,6 +9,7 @@ import {
   IconDownload,
   IconEye,
   IconFileSpreadsheet,
+  IconFileTypePdf,
   IconKey,
   IconPencil,
   IconRefresh,
@@ -23,6 +24,7 @@ import { isNotFoundError } from '../../components/NotFoundCard';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorAlert, PageLoader } from '../../components/QueryState';
 import { GradingModeBadge } from '../../components/StatusBadges';
+import { useDownload } from '../../utils/download';
 import { notifyError } from '../../utils/errors';
 import { formatDateTime, fromNow, formatScore, isPast } from '../../utils/format';
 import { parseId } from '../../utils/params';
@@ -81,6 +83,7 @@ function HeaderActions({
 }) {
   const regrade = useRegrade(assignment);
   const download = (fn: (id: number) => Promise<void>) => fn(assignment.id).catch((e) => notifyError(e));
+  const report = useDownload(() => endpoints.downloadAssignmentReport(assignment.id), 'Could not export the report');
   return (
     <>
       <Button
@@ -91,6 +94,16 @@ function HeaderActions({
       >
         Edit
       </Button>
+      <Tooltip label="Summary, score distribution and every student's result, ready to print">
+        <Button
+          variant="default"
+          leftSection={<IconFileTypePdf size={16} />}
+          loading={report.pending}
+          onClick={report.start}
+        >
+          Export PDF
+        </Button>
+      </Tooltip>
       {assignment.gradingMode === 'auto' && (
         <Tooltip label={submitted ? 'Grade every submission again with the current key' : 'Nothing to grade yet'}>
           <Button

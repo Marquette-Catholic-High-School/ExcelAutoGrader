@@ -19,6 +19,7 @@
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup.mjs",
     "restore": "node --disable-warning=ExperimentalWarning scripts/restore.mjs",
     "seed": "node --disable-warning=ExperimentalWarning scripts/seed.mjs",
+    "email-setup": "node --disable-warning=ExperimentalWarning scripts/email-setup.mjs",
     "test": "npm test -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
     "build": "npm run build -w client"

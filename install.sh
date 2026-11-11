@@ -6,9 +6,10 @@
 #   Pass options after "bash -s --", e.g. ... | bash -s -- --demo --port 8080
 #
 #   Already downloaded (run inside the folder):
-#     ./install.sh [--demo] [--no-demo] [--port <n>] [--host <ip>] [--start] [--no-start] [--yes]
+#     ./install.sh [--demo] [--no-demo] [--port <n>] [--host <ip>] [--start] [--no-start] [--no-email-setup] [--yes]
 #
-#   Environment overrides: EXCEL_AUTOGRADER_DIR (install folder), EXCEL_AUTOGRADER_REPO, EXCEL_AUTOGRADER_BRANCH
+#   Environment overrides: EXCEL_AUTOGRADER_DIR (install folder), EXCEL_AUTOGRADER_REPO, EXCEL_AUTOGRADER_BRANCH,
+#   CLOUDFLARE_API_TOKEN (turns on email without asking for the token)
 set -euo pipefail
 
 REPO_URL="${EXCEL_AUTOGRADER_REPO:-https://github.com/Marquette-Catholic-High-School/ExcelAutoGrader.git}"
@@ -39,13 +40,17 @@ Options:
                    127.0.0.1 (this computer only; default on macOS)
   --start          start the app at the end without asking
   --no-start       don't start the app at the end
-  --yes            use the defaults without asking any questions
+  --no-email-setup don't ask for the Cloudflare API token that turns on email (later: npm run email-setup)
+  --yes            use the defaults without asking any questions (email stays off unless
+                   CLOUDFLARE_API_TOKEN is set)
   --help           show this help
 
 Environment variables:
   EXCEL_AUTOGRADER_DIR     folder to install into (default: ~/ExcelAutoGrader)
   EXCEL_AUTOGRADER_REPO    git repository to download from
   EXCEL_AUTOGRADER_BRANCH  branch to download (default: main)
+  CLOUDFLARE_API_TOKEN     Cloudflare API token for email, saved in config.env without asking (for unattended
+                           installs; without it the installer asks, and Enter skips)
 USAGE
 }
 
@@ -54,7 +59,7 @@ check_options() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -h | --help) usage; exit 0 ;;
-      --demo | --no-demo | --start | --no-start | --yes | -y) ;;
+      --demo | --no-demo | --start | --no-start | --no-email-setup | --yes | -y) ;;
       --port | --host)
         [ $# -ge 2 ] || die "$1 needs a value."
         shift

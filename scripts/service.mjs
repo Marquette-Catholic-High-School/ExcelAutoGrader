@@ -8,8 +8,8 @@
  *   node scripts/service.mjs status    exit code 0: running, 3: not running, 1: not answering / something else
  *   node scripts/service.mjs run       run in this terminal until Ctrl+C
  *
- * Settings come from config.env (PORT, HOST, DATA_DIR, REQUIRE_CODE_FOR_INVITES). Uses the built web app in
- * client/dist.
+ * Settings come from config.env (port, host, data folder, sign-up and email settings; the server gets every one).
+ * Uses the built web app in client/dist.
  */
 import {
   COMMANDS,

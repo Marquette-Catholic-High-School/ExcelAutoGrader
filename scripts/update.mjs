@@ -3,13 +3,17 @@
  * update.ps1 / update.cmd; can also be run as `npm run update`.
  *
  * 1. Checks GitHub for a new version (nothing else happens when you are already up to date).
- * 2. Downloads it, reinstalls dependencies if they changed (stopping the app for that), and builds the new web
- *    app next to the current one, while the app keeps running.
- * 3. Stops the app, backs up the database to <data folder>/backups (the newest ten are kept), switches to the
+ * 2. Downloads it, adds settings that are new in this version to config.env (existing values are kept) and,
+ *    while email is off and someone is at the terminal, asks for the Cloudflare API token that turns it on
+ *    (Enter skips). The app keeps running while the update waits for an answer.
+ * 3. Reinstalls dependencies if they changed (stopping the app for that) and builds the new web app next to the
+ *    current one.
+ * 4. Stops the app, backs up the database to <data folder>/backups (the newest ten are kept), switches to the
  *    new web app and starts the new version, if the app was running.
  * If any step fails, the previous version is put back and started again; if the new version had already
- * started, the database is put back from the backup made in step 3. config.env and the data folder are never
- * part of an update.
+ * started, the database is put back from the backup made in step 4. An update that was cut off (the terminal
+ * closed, the computer restarted) is finished by the next run of the update. config.env and the data folder are
+ * never part of what is downloaded.
  *
  *   --check            only report whether an update is available (exit code 0: up to date, 100: available)
  *   --force            reinstall dependencies, rebuild and restart even when already up to date
@@ -17,13 +21,18 @@
  *   --discard-changes  set aside edits made to the app's own files in this folder (asks first unless --yes)
  *   --reset-to-github  switch to GitHub's version even though this copy has commits that GitHub doesn't have,
  *                      e.g. after GitHub's history was rewritten (asks first unless --yes)
- *   --yes              don't ask questions
+ *   --no-email-setup   don't ask for the Cloudflare API token (set it up later with npm run email-setup); the
+ *                      same as EXCEL_AUTOGRADER_EMAIL_SETUP=skip in the environment, which older versions of this
+ *                      script pass on unchanged (they reject the option)
+ *   --yes              don't ask questions (with CLOUDFLARE_API_TOKEN set in the environment, that token is saved)
  */
 // How an update is split between versions: this (old) copy fetches and moves the files to the new version,
 // then runs the NEW copy's update.mjs with --continue-from <previous commit>, so the new version installs,
 // builds and starts itself. The new copy records its progress in logs/update-state.json; if it fails, this
 // old copy puts everything back, because it knows how the previous version is built and started. Future
-// versions must keep accepting --continue-from and keep the state file's fields.
+// versions must keep accepting --continue-from (with --force, --no-restart, --no-email-setup and --yes) and
+// keep the state file's fields. The new copy's questions (such as the email token) reach the terminal because
+// the old copy passes it on (stdio: 'inherit').
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -44,6 +53,7 @@ import {
   dataDir,
   dim,
   discardClientBuild,
+  ensureConfigFile,
   ensureOwner,
   git,
   gitPaths,
@@ -67,6 +77,14 @@ import {
   uniquePath,
   warn,
 } from './lib.mjs';
+import {
+  checkSavedToken,
+  emailConfigured,
+  emailOffNote,
+  emailSetupMode,
+  nodemailerAvailable,
+  optionalEmailSetup,
+} from './email.mjs';
 
 const STATE_FILE = path.join(LOG_DIR, 'update-state.json');
 const EXIT_UPDATE_AVAILABLE = 100;
@@ -78,6 +96,9 @@ function parseArgs(argv) {
     restart: true,
     discard: false,
     resetToGitHub: false,
+    // Also from the environment: an update started by an older version of this script (which rejects
+    // --no-email-setup) still reaches this version with it.
+    emailSetup: !/^(skip|no|off|0|false)$/i.test(process.env.EXCEL_AUTOGRADER_EMAIL_SETUP ?? ''),
     yes: false,
     continueFrom: null,
   };
@@ -88,6 +109,7 @@ function parseArgs(argv) {
     else if (arg === '--no-restart') options.restart = false;
     else if (arg === '--discard-changes') options.discard = true;
     else if (arg === '--reset-to-github') options.resetToGitHub = true;
+    else if (arg === '--no-email-setup') options.emailSetup = false;
     else if (arg === '--yes' || arg === '-y') options.yes = true;
     else if (arg === '--continue-from' && /^[0-9a-f]{7,64}$/.test(argv[i + 1] ?? '')) options.continueFrom = argv[++i];
     else if (arg === '--help' || arg === '-h') {
@@ -120,13 +142,18 @@ function dependenciesChanged(from, to) {
 /* State shared with the new version's update.mjs                     */
 /* ------------------------------------------------------------------ */
 
-function readState(runId) {
+function readLastState() {
   try {
     const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    return state.run === runId ? state : null;
+    return state && typeof state === 'object' && typeof state.run === 'string' ? state : null;
   } catch {
     return null;
   }
+}
+
+function readState(runId) {
+  const state = readLastState();
+  return state?.run === runId ? state : null;
 }
 
 function saveState(state) {
@@ -332,10 +359,36 @@ function restoreTree(previous, added) {
 /* Installing the new version (runs in the NEW copy of this script)   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Settings this version adds go into config.env, and email can be turned on, before anything is stopped (the app
+ * keeps running while the question waits for an answer) and before the app is restarted, so the new version starts
+ * with them. Returns true when a token was saved that could not be checked yet (the mail library comes with the
+ * dependencies installed next).
+ */
+async function updateSettings(options) {
+  const { created, added } = ensureConfigFile();
+  if (created || added.length) {
+    step('Settings');
+    if (created) success('Created config.env with the default settings.');
+    else success(`Added new settings to config.env (your other settings are unchanged): ${added.join(', ')}.`);
+  }
+  if (emailConfigured()) return false;
+  const mode = emailSetupMode({ yes: options.yes, skip: !options.emailSetup });
+  if (!mode) {
+    info(emailOffNote());
+    return false;
+  }
+  step('Email');
+  const checkLater = !nodemailerAvailable();
+  return (await optionalEmailSetup({ ...mode, checkLater })) && checkLater;
+}
+
 async function applyUpdate(previous, options, state) {
-  const config = readConfig();
   const wasRunning = state.wasRunning;
   const save = (changes) => saveState(Object.assign(state, changes));
+
+  const checkToken = await updateSettings(options);
+  const config = readConfig();
 
   const head = git(['rev-parse', 'HEAD']);
   if (options.force || (head !== previous && dependenciesChanged(previous, head))) {
@@ -347,6 +400,10 @@ async function applyUpdate(previous, options, state) {
     }
     save({ depsTouched: true });
     installDependencies();
+  }
+  if (checkToken) {
+    step('Email');
+    await checkSavedToken();
   }
 
   step('Building the web app');
@@ -408,6 +465,7 @@ async function handOver(state, options) {
   args.push('--continue-from', state.previous);
   if (options.force) args.push('--force');
   if (!options.restart) args.push('--no-restart');
+  if (!options.emailSetup) args.push('--no-email-setup');
   if (options.yes) args.push('--yes');
   // Ctrl+C stops the new version's steps; this process stays to put the previous version back.
   const ignore = () => {};
@@ -476,6 +534,54 @@ function failure(state, restored) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Updates that were cut off                                          */
+/* ------------------------------------------------------------------ */
+
+/** applyUpdate in this process (--force, or finishing a cut-off update); on failure the previous version is put back. */
+async function applyHere(previous, options, state, config) {
+  try {
+    await applyUpdate(previous, options, state);
+  } catch (err) {
+    console.error(`\n${red('The update failed:')} ${err.message}`);
+    const restored = await rollback(state, config);
+    saveState(Object.assign(state, { result: 'failed', error: err.message }));
+    throw new ScriptError(failure(state, restored));
+  }
+  saveState(Object.assign(state, { result: 'done' }));
+}
+
+/**
+ * The last update, if it was cut off halfway: its process ended (the terminal closed, the computer restarted)
+ * before it finished or put the previous version back. Its files are already the new version's, but the
+ * dependencies, web app and running app may still be the old ones. (The lock this run holds means no update is
+ * running now.)
+ */
+function interruptedUpdate() {
+  const state = readLastState();
+  if (!state || state.result === 'done' || !state.target || !state.previous) return null;
+  // A rollback resets git to the previous version; any other commit means it was changed by hand since.
+  if (git(['rev-parse', 'HEAD']) !== state.target) return null;
+  // A failed --force run (no new version) may have been put back already: there is nothing to tell apart.
+  if (state.result !== 'running' && state.target === state.previous) return null;
+  return state;
+}
+
+/** Finishes a cut-off update: the same steps as the new version runs, from where the files are now. */
+async function finishInterruptedUpdate(last, options) {
+  warn(`The update to ${describe(last.target)} (started ${last.startedAt}) did not finish. Finishing it now.`);
+  const config = readConfig();
+  const running = (await serverStatus(config)).running;
+  if (running) await checkPortPermission(config);
+  const state = {
+    ...newState(last.previous, last.target, Boolean(last.wasRunning) || running),
+    // The cut-off run may have stopped the app already: then it is started again even with --no-restart.
+    oldStopped: Boolean(last.wasRunning) && !running,
+  };
+  const force = options.force || Boolean(last.depsTouched) || last.previous === last.target;
+  await applyHere(last.previous, { ...options, force }, state, config);
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -489,6 +595,14 @@ runMain(async () => {
   ensureOwner('update');
   acquireLock(options.check ? 'update check' : 'update');
   const { upstream, remote } = ensureRepository();
+
+  const interrupted = interruptedUpdate();
+  if (interrupted && options.check) {
+    warn(`The last update (to ${describe(interrupted.target)}) did not finish. Run the update to finish it.`);
+    process.exitCode = EXIT_UPDATE_AVAILABLE;
+    return;
+  }
+  if (interrupted) await finishInterruptedUpdate(interrupted, options);
 
   step('Checking GitHub for a new version');
   fetchUpstream(remote, upstream);
@@ -555,13 +669,8 @@ runMain(async () => {
 
   if (!mode) {
     // --force without a new version: the same steps, in this process.
-    try {
-      await applyUpdate(current, options, state);
-      return;
-    } catch (err) {
-      console.error(`\n${red('The update failed:')} ${err.message}`);
-      throw new ScriptError(failure(state, await rollback(state, config)));
-    }
+    await applyHere(current, options, state, config);
+    return;
   }
 
   guardProtectedPaths(latest, config);

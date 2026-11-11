@@ -5,7 +5,10 @@
 #                                                                    (exit code 100 if there is one)
 #   powershell -ExecutionPolicy Bypass -File .\update.ps1 --help     all options
 #
-# Safe to run from Task Scheduler: it does nothing when there is no new version.
+# While email is off it asks for the Cloudflare API token that turns it on (Enter skips; --no-email-setup or
+# --yes don't ask). Safe to run from Task Scheduler (with --yes): it does nothing when there is no new version.
+# The first update from a version without email rejects --no-email-setup: set $env:EXCEL_AUTOGRADER_EMAIL_SETUP='skip'
+# for that one instead.
 # (Keep this file ASCII-only: Windows PowerShell 5.1 misreads UTF-8 files without a BOM.)
 
 $ErrorActionPreference = 'Stop'

@@ -9,6 +9,7 @@ import { endpoints, qk } from '../../../api/endpoints';
 import { fieldErrors, notifyError, notifySuccess } from '../../../utils/errors';
 import { classFormRules } from './CreateClassModal';
 import { confirmAction } from './confirmAction';
+import { EmailSettingsSection } from './EmailSettings';
 import { CopyIconButton } from './JoinCode';
 import { invalidateClassSummary } from './queries';
 
@@ -224,6 +225,7 @@ export function SettingsPanel({ cls }: { cls: ClassSummary }) {
     <Stack gap="lg" maw={760}>
       <DetailsCard cls={cls} />
       <JoinCodeCard cls={cls} />
+      <EmailSettingsSection classId={cls.id} />
       <DangerZone cls={cls} />
     </Stack>
   );

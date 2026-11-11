@@ -5,7 +5,10 @@
 #   ./update.sh --check       only report whether a new version is available (exit code 100 if there is one)
 #   ./update.sh --help        all options
 #
-# Safe to run on a schedule (e.g. cron): it does nothing when there is no new version.
+# While email is off it asks for the Cloudflare API token that turns it on (Enter skips; --no-email-setup or
+# --yes don't ask). Safe to run on a schedule (e.g. cron, with --yes): it does nothing when there is no new version.
+# The first update from a version without email rejects --no-email-setup: use EXCEL_AUTOGRADER_EMAIL_SETUP=skip
+# ./update.sh for that one.
 set -euo pipefail
 
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then RED=$'\033[31m' PLAIN=$'\033[0m'; else RED='' PLAIN=''; fi

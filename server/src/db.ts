@@ -33,7 +33,12 @@ db.exec(`
     created_at TEXT NOT NULL,
     created_by_teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     pending INTEGER NOT NULL DEFAULT 0,
-    placeholder_name INTEGER NOT NULL DEFAULT 0
+    placeholder_name INTEGER NOT NULL DEFAULT 0,
+    email_opt_out INTEGER NOT NULL DEFAULT 0,
+    notification_settings TEXT,
+    daily_report_last_date TEXT,
+    daily_report_last_at TEXT,
+    daily_report_last_submission_id INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS sessions (
@@ -49,7 +54,9 @@ db.exec(`
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     join_code TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    notification_settings TEXT,
+    reminders_since TEXT
   );
 
   CREATE TABLE IF NOT EXISTS enrollments (
@@ -101,21 +108,88 @@ db.exec(`
     UNIQUE (assignment_id, student_id, attempt)
   );
 
+  CREATE TABLE IF NOT EXISTS email_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('receipt', 'overdue', 'daily_report', 'test')),
+    to_address TEXT NOT NULL,
+    to_name TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL,
+    html TEXT NOT NULL,
+    text TEXT NOT NULL,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    class_id INTEGER REFERENCES classes(id) ON DELETE CASCADE,
+    assignment_id INTEGER REFERENCES assignments(id) ON DELETE CASCADE,
+    submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL,
+    state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'sent', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    sent_at TEXT
+  );
+
+  -- One row per email queued or sent, for the daily limits. No foreign keys: deleting a class (whose outbox rows
+  -- go with it) must not reset what its teacher already sent. Rows older than two days are pruned.
+  CREATE TABLE IF NOT EXISTS email_quota (
+    id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    recipient_key TEXT NOT NULL,
+    teacher_id INTEGER,
+    pending INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS email_recipients (
+    address TEXT PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    unsubscribed_at TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id, student_id);
   CREATE INDEX IF NOT EXISTS idx_assignments_class ON assignments(class_id);
   CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id);
+  CREATE INDEX IF NOT EXISTS idx_outbox_queue ON email_outbox(state, next_attempt_at);
+  CREATE INDEX IF NOT EXISTS idx_outbox_reminders ON email_outbox(assignment_id, user_id, kind);
+  CREATE INDEX IF NOT EXISTS idx_outbox_class ON email_outbox(class_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_outbox_recipient ON email_outbox(to_address, created_at);
+  CREATE INDEX IF NOT EXISTS idx_outbox_user ON email_outbox(user_id);
+  CREATE INDEX IF NOT EXISTS idx_outbox_submission ON email_outbox(submission_id);
+  CREATE INDEX IF NOT EXISTS idx_quota_created ON email_quota(created_at);
+  CREATE INDEX IF NOT EXISTS idx_quota_recipient ON email_quota(recipient_key, created_at);
+  CREATE INDEX IF NOT EXISTS idx_quota_teacher ON email_quota(teacher_id, created_at);
 `);
 
-/** Brings databases created by older versions up to date (CREATE TABLE IF NOT EXISTS leaves them as they were). */
-function addColumnIfMissing(table: string, column: string, definition: string): void {
+/**
+ * Brings databases created by older versions up to date (CREATE TABLE IF NOT EXISTS leaves them as they were).
+ * Returns true when the column was added.
+ */
+function addColumnIfMissing(table: string, column: string, definition: string): boolean {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!columns.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  if (columns.some((c) => c.name === column)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  return true;
 }
 
 // Existing accounts keep NULL: nobody is recorded as their creator.
 addColumnIfMissing('users', 'created_by_teacher_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 addColumnIfMissing('users', 'pending', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('users', 'placeholder_name', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('users', 'email_opt_out', 'INTEGER NOT NULL DEFAULT 0');
+addColumnIfMissing('users', 'notification_settings', 'TEXT');
+addColumnIfMissing('users', 'daily_report_last_date', 'TEXT');
+addColumnIfMissing('users', 'daily_report_last_at', 'TEXT');
+addColumnIfMissing('users', 'daily_report_last_submission_id', 'INTEGER');
+addColumnIfMissing('classes', 'notification_settings', 'TEXT');
+// Classes that existed before email reminders get them only for assignments due after this update; newer classes
+// leave the column NULL, which means "since the class was created".
+if (addColumnIfMissing('classes', 'reminders_since', 'TEXT')) {
+  db.prepare('UPDATE classes SET reminders_since = ?').run(new Date().toISOString());
+}
 
 /* Raw row shapes (snake_case, exactly as stored). Booleans are 0/1, JSON columns are strings. */
 
@@ -136,6 +210,19 @@ export interface UserRow {
   pending: number;
   /** 1 while `name` was made up from the email (the teacher left it blank); sign-up then replaces it. */
   placeholder_name: number;
+  /** Students: 1 turns off receipts and overdue reminders. */
+  email_opt_out: number;
+  /** Teachers: JSON of the daily-report settings (dailyReport, dailyReportTime, skipEmptyReports); NULL = defaults. */
+  notification_settings: string | null;
+  /** Teachers: local date (YYYY-MM-DD in TIME_ZONE) of the last scheduled daily report, sent or skipped. */
+  daily_report_last_date: string | null;
+  /** Teachers: when the last scheduled daily report was sent (ISO); the next one covers what came after. */
+  daily_report_last_at: string | null;
+  /**
+   * Teachers: the highest submission id when the last scheduled report was made, so an upload that was still
+   * arriving then (submitted_at is when it started) is in the next report.
+   */
+  daily_report_last_submission_id: number | null;
 }
 
 export interface SessionRow {
@@ -152,6 +239,10 @@ export interface ClassRow {
   description: string;
   join_code: string;
   created_at: string;
+  /** JSON of ClassNotificationSettings without remindersSince; NULL = DEFAULT_CLASS_NOTIFICATION_SETTINGS. */
+  notification_settings: string | null;
+  /** Overdue reminders only cover assignments due after this (ISO); NULL = since the class was created. */
+  reminders_since: string | null;
 }
 
 export interface EnrollmentRow {
@@ -199,6 +290,30 @@ export interface SubmissionRow {
   feedback: string;
   graded_by: number | null;
   graded_at: string | null;
+}
+
+/** One email: queued for the background worker, or a record of one sent right away (test email, report on demand). */
+export interface EmailOutboxRow {
+  id: number;
+  kind: 'receipt' | 'overdue' | 'daily_report' | 'test';
+  to_address: string;
+  to_name: string;
+  subject: string;
+  html: string;
+  text: string;
+  /** The recipient's account (the student, or the teacher for daily reports and test emails). */
+  user_id: number | null;
+  /** NULL for daily reports and test emails, which are about the teacher rather than one class. */
+  class_id: number | null;
+  assignment_id: number | null;
+  submission_id: number | null;
+  state: 'queued' | 'sent' | 'failed';
+  attempts: number;
+  /** When the worker may (re)try it; while a send is in progress, when a send that never finished is retried. */
+  next_attempt_at: string;
+  last_error: string | null;
+  created_at: string;
+  sent_at: string | null;
 }
 
 type Param = null | number | bigint | string | NodeJS.ArrayBufferView;

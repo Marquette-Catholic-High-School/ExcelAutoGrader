@@ -14,13 +14,17 @@ import type {
   AssignmentSummary,
   AuthResponse,
   ChangePasswordRequest,
+  ClassNotificationSettings,
   ClassSummary,
   CreateClassRequest,
+  EmailLogEntry,
+  EmailStatus,
   GradebookResponse,
   GradeSubmissionRequest,
   GradingConfig,
   KeyPreview,
   LoginRequest,
+  MyNotificationSettings,
   OkResponse,
   RegisterRequest,
   RegradeResponse,
@@ -28,6 +32,7 @@ import type {
   RosterPreview,
   StudentInfo,
   SubmissionDetail,
+  TestEmailResponse,
   UpdateClassRequest,
   User,
   WorkbookData,
@@ -52,7 +57,14 @@ export const qk = {
   keyWorkbook: (assignmentId: number) => ['assignments', assignmentId, 'key-workbook'] as const,
   submission: (id: number) => ['submissions', id] as const,
   submissionWorkbook: (id: number) => ['submissions', id, 'workbook'] as const,
+  emailStatus: ['email-status'] as const,
+  classNotifications: (classId: number) => ['classes', classId, 'notifications'] as const,
+  classEmails: (classId: number) => ['classes', classId, 'emails'] as const,
+  myNotifications: ['my-notifications'] as const,
 };
+
+/** Body of PUT /api/classes/:classId/notifications (remindersSince is read-only). */
+export type ClassNotificationsUpdate = Partial<Omit<ClassNotificationSettings, 'remindersSince'>>;
 
 /** Fields for creating/updating an assignment. Files are optional on update. */
 export interface AssignmentFormPayload extends Partial<AssignmentFormFields> {
@@ -162,4 +174,30 @@ export const endpoints = {
   // gradebook
   getGradebook: (classId: number) => api.get<GradebookResponse>(`/api/classes/${classId}/gradebook`),
   downloadGradebookCsv: (classId: number) => api.download(`/api/classes/${classId}/gradebook.csv`, 'gradebook.csv'),
+
+  // reports (PDF downloads; the server names the files)
+  downloadAssignmentReport: (assignmentId: number) =>
+    api.download(`/api/reports/assignments/${assignmentId}.pdf`, 'Assignment report.pdf'),
+  downloadStudentReport: (classId: number, studentId: number) =>
+    api.download(`/api/reports/classes/${classId}/students/${studentId}.pdf`, 'Student report.pdf'),
+  downloadAllStudentReports: (classId: number) =>
+    api.download(`/api/reports/classes/${classId}/students.pdf`, 'Student reports.pdf'),
+  downloadGradebookPdf: (classId: number) =>
+    api.download(`/api/reports/classes/${classId}/gradebook.pdf`, 'Gradebook.pdf'),
+
+  // email
+  getEmailStatus: () => api.get<EmailStatus>('/api/email/status'),
+  getClassNotifications: (classId: number) =>
+    api.get<ClassNotificationSettings>(`/api/classes/${classId}/notifications`),
+  updateClassNotifications: (classId: number, body: ClassNotificationsUpdate) =>
+    api.put<ClassNotificationSettings>(`/api/classes/${classId}/notifications`, body),
+  /** Newest first; limit 1–500. */
+  listClassEmails: (classId: number, limit = 100) =>
+    api.get<EmailLogEntry[]>(`/api/classes/${classId}/emails?limit=${limit}`),
+  getMyNotifications: () => api.get<MyNotificationSettings>('/api/me/notifications'),
+  updateMyNotifications: (body: Partial<MyNotificationSettings>) =>
+    api.put<MyNotificationSettings>('/api/me/notifications', body),
+  /** Sends right away (not queued) to the signed-in teacher; 503 when email isn't set up, 502 when sending fails. */
+  sendTestEmail: () => api.post<TestEmailResponse>('/api/me/test-email'),
+  sendDailyReportNow: () => api.post<TestEmailResponse>('/api/me/daily-report'),
 };

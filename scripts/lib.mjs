@@ -16,6 +16,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline/promises';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -56,6 +57,7 @@ export const COMMANDS = IS_WINDOWS
       backup: 'npm.cmd run backup',
       restore: 'npm.cmd run restore',
       seed: 'npm.cmd run seed',
+      emailSetup: '.\\email-setup.cmd',
     }
   : {
       start: 'npm start',
@@ -68,6 +70,7 @@ export const COMMANDS = IS_WINDOWS
       backup: 'npm run backup',
       restore: 'npm run restore',
       seed: 'npm run seed',
+      emailSetup: 'npm run email-setup',
     };
 
 /* ------------------------------------------------------------------ */
@@ -89,6 +92,13 @@ export const warn = (message) => console.log(`    ${yellow('!')} ${message}`);
 
 /** An expected failure with a message for the person running the script (no stack trace). */
 export class ScriptError extends Error {}
+
+/** Ctrl+C at a question. */
+export class StoppedError extends ScriptError {
+  constructor() {
+    super('Stopped (Ctrl+C).');
+  }
+}
 
 /** Runs main() and turns failures into a readable message and exit code 1. */
 export function runMain(main) {
@@ -278,6 +288,63 @@ export async function confirm(question, defaultYes) {
   }
 }
 
+/** Asks for a line of text (trimmed). '' when nobody is at a terminal or the input ends (Ctrl+D). Ctrl+C stops. */
+export async function askText(question) {
+  if (!process.stdin.isTTY) return '';
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  // Without these the question would never be answered, and the script would end halfway with exit code 0.
+  const interrupted = new Promise((resolve, reject) => {
+    rl.once('SIGINT', () => reject(new StoppedError()));
+    rl.once('close', () => resolve(''));
+  });
+  try {
+    return (await Promise.race([rl.question(`    ${question} `), interrupted])).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * Asks for a secret (such as an API token) without showing what is typed or pasted: no echo, not even stars.
+ * Backspace and Ctrl+U work. '' when nobody is at a terminal, or on Enter or Ctrl+D with nothing typed. Ctrl+C stops.
+ */
+export function askSecret(question) {
+  const input = process.stdin;
+  if (!input.isTTY || typeof input.setRawMode !== 'function') return Promise.resolve('');
+  return new Promise((resolve, reject) => {
+    const decoder = new StringDecoder('utf8');
+    let value = '';
+    let inEscape = false;
+    const finish = (error) => {
+      input.off('data', onData);
+      input.setRawMode(false);
+      input.pause();
+      process.stdout.write('\n');
+      if (error) reject(error);
+      else resolve(value.trim());
+    };
+    const onData = (chunk) => {
+      for (const char of decoder.write(chunk)) {
+        if (inEscape) {
+          // Arrow keys and other special keys arrive as ESC [ ... ending in a letter or ~; none of it is typed text.
+          if (/[A-Za-z~]/.test(char)) inEscape = false;
+        } else if (char === '\x1b') inEscape = true;
+        else if (char === '\r' || char === '\n') return finish();
+        else if (char === '\x03') return finish(new StoppedError());
+        else if (char === '\x04') {
+          if (!value) return finish();
+        } else if (char === '\x7f' || char === '\b') value = value.slice(0, -1);
+        else if (char === '\x15') value = '';
+        else if (char >= ' ') value += char;
+      }
+    };
+    process.stdout.write(`    ${question} `);
+    input.setRawMode(true);
+    input.on('data', onData);
+    input.resume();
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* One install/update/start/stop at a time                            */
 /* ------------------------------------------------------------------ */
@@ -367,50 +434,161 @@ export function lockEnv() {
 /* Settings (config.env)                                              */
 /* ------------------------------------------------------------------ */
 
+/** Email through Cloudflare Email Service (implicit TLS on port 465; the SMTP password is the API token). */
+export const EMAIL_DEFAULTS = {
+  EMAIL_FROM_NAME: "Podner's Excel",
+  EMAIL_FROM_ADDRESS: 'noreply@mchstech.org',
+  SMTP_HOST: 'smtp.mx.cloudflare.net',
+  SMTP_PORT: '465',
+  SMTP_USER: 'api_token',
+};
+
+/**
+ * The settings in config.env: blocks of a comment and the keys it explains, with their defaults. Values are written
+ * without quotes (an apostrophe as in Podner's Excel needs none). Settings added in later versions are appended to
+ * an older config.env by the installer and the update (see ensureConfigFile).
+ */
+const CONFIG_BLOCKS = [
+  {
+    comment: `# Port the app listens on. Open http://localhost:<PORT> in a browser.
+# With 80 (the web's standard port) the address needs no port number: http://<this computer's name>.`,
+    keys: { PORT: DEFAULT_PORT },
+  },
+  {
+    comment: `# 127.0.0.1 = only this computer can open the app.
+# 0.0.0.0   = other computers on your network can open it too, at http://<this computer's name or IP>:<PORT>.
+#             Anyone who can reach it can create an account, so only do this on a network you trust.`,
+    keys: { HOST: DEFAULT_HOST },
+  },
+  {
+    comment: `# Folder for the database and uploaded workbooks. Leave empty to use server/data inside the install folder.
+# A relative path is relative to the install folder; ~ means your home folder.`,
+    keys: { DATA_DIR: '' },
+  },
+  {
+    comment: `# 1 = a student a teacher added by email signs up with that email and the class code (the app can't check
+#     that an email belongs to the person signing up, so the code keeps others from taking the student's place).
+# 0 = the email alone is enough.`,
+    keys: { REQUIRE_CODE_FOR_INVITES: '1' },
+  },
+  {
+    comment: `# ---- Email (Cloudflare Email Service) ----
+# Students get a receipt for each submission and reminders about overdue work; teachers get a daily report.
+# Teachers choose what is sent for each class in the app. To set up or change the token: ${COMMANDS.emailSetup}
+#
+# Cloudflare API token with the "Email Sending: Edit" permission. Empty = the app sends no email.
+# Keep this file private: anyone who has the token can send email from your domain.`,
+    keys: { CLOUDFLARE_API_TOKEN: '' },
+  },
+  {
+    comment: `# Sender of every email. The address's domain must be onboarded for Email Sending in Cloudflare.`,
+    keys: { EMAIL_FROM_NAME: EMAIL_DEFAULTS.EMAIL_FROM_NAME, EMAIL_FROM_ADDRESS: EMAIL_DEFAULTS.EMAIL_FROM_ADDRESS },
+  },
+  {
+    comment: `# Cloudflare's mail server: port 465 with TLS, user name "api_token", the token above as the password.`,
+    keys: {
+      SMTP_HOST: EMAIL_DEFAULTS.SMTP_HOST,
+      SMTP_PORT: EMAIL_DEFAULTS.SMTP_PORT,
+      SMTP_USER: EMAIL_DEFAULTS.SMTP_USER,
+    },
+  },
+  {
+    comment: `# Address students use to open the app, for the links in emails (e.g. http://grading-pc or https://grader.school.org).
+# Empty = a guess from this computer's name.`,
+    keys: { APP_URL: '' },
+  },
+  {
+    comment: `# Time zone of the daily report time and reminders: an IANA name such as America/Chicago. Empty = this computer's.`,
+    keys: { TIME_ZONE: '' },
+  },
+  {
+    comment: `# Most emails the app sends in 24 hours (a guard against floods: anyone who can open the app can sign up).
+# Empty = 2000. Each address also gets at most 50 a day.`,
+    keys: { EMAIL_DAILY_LIMIT: '' },
+  },
+];
+
+/** Every setting config.env can have (the server gets each one; see serverEnv). */
+const CONFIG_KEYS = CONFIG_BLOCKS.flatMap((block) => Object.keys(block.keys));
+
+const renderBlock = (block, keys, eol) =>
+  [...block.comment.split('\n'), ...keys.map((key) => `${key}=${block.keys[key]}`)].join(eol) + eol;
+
 const DEFAULT_CONFIG = `# Excel Autograder settings, read when the app starts and by the update script.
 # Restart the app after changing them: ${COMMANDS.restart}
 
-# Port the app listens on. Open http://localhost:<PORT> in a browser.
-# With 80 (the web's standard port) the address needs no port number: http://<this computer's name>.
-PORT=${DEFAULT_PORT}
+${CONFIG_BLOCKS.map((block) => renderBlock(block, Object.keys(block.keys), '\n')).join('\n')}`;
 
-# 127.0.0.1 = only this computer can open the app.
-# 0.0.0.0   = other computers on your network can open it too, at http://<this computer's name or IP>:<PORT>.
-#             Anyone who can reach it can create an account, so only do this on a network you trust.
-HOST=${DEFAULT_HOST}
+const hasKey = (text, key) => new RegExp(`^[ \\t]*${key}[ \\t]*=`, 'm').test(text);
 
-# Folder for the database and uploaded workbooks. Leave empty to use server/data inside the install folder.
-# A relative path is relative to the install folder; ~ means your home folder.
-DATA_DIR=
-
-# 1 = a student a teacher added by email signs up with that email and the class code (the app can't check
-#     that an email belongs to the person signing up, so the code keeps others from taking the student's place).
-# 0 = the email alone is enough.
-REQUIRE_CODE_FOR_INVITES=1
-`;
-
-/** Parses config.env (KEY=VALUE lines, # comments). Missing file → {}. */
+/** Parses config.env (KEY=VALUE lines, # comments). Missing file → {}. Empty values are left out. */
 export function readConfig() {
   if (!fs.existsSync(CONFIG_FILE)) return {};
   const config = {};
   for (const line of fs.readFileSync(CONFIG_FILE, 'utf8').split(/\r?\n/)) {
     const match = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
     if (!match) continue;
+    // Only a value that starts AND ends with the same quote is quoted: Podner's Excel stays as it is.
     const value = match[2].replace(/^(['"])(.*)\1$/, '$2');
     if (value !== '') config[match[1]] = value;
   }
   return config;
 }
 
-/** Creates config.env with defaults if missing, then applies `changes` (e.g. { PORT: '8080' }). */
+/** Writes config.env readable by its owner only (it can hold the Cloudflare API token). */
+function saveConfigText(text) {
+  fs.writeFileSync(CONFIG_FILE, text, { mode: 0o600 });
+  restrictConfigFile();
+}
+
+/** chmod 600 on macOS and Linux (an existing file keeps its mode when written). Windows: left as it is. */
+function restrictConfigFile() {
+  if (IS_WINDOWS) return;
+  try {
+    if ((fs.statSync(CONFIG_FILE).mode & 0o077) !== 0) fs.chmodSync(CONFIG_FILE, 0o600);
+  } catch (err) {
+    warn(`Could not make ${CONFIG_FILE} private (${err.message}). Run: chmod 600 "${CONFIG_FILE}"`);
+  }
+}
+
+/**
+ * Creates config.env with the defaults, or appends the settings an older config.env lacks, each with its comment;
+ * existing values are never changed. Also makes the file private. Returns whether it was created and the keys added.
+ */
+export function ensureConfigFile() {
+  if (!fs.existsSync(CONFIG_FILE)) {
+    saveConfigText(DEFAULT_CONFIG);
+    return { created: true, added: [] };
+  }
+  const text = fs.readFileSync(CONFIG_FILE, 'utf8');
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const added = [];
+  const missing = [];
+  for (const block of CONFIG_BLOCKS) {
+    const keys = Object.keys(block.keys).filter((key) => !hasKey(text, key));
+    if (keys.length === 0) continue;
+    missing.push(renderBlock(block, keys, eol));
+    added.push(...keys);
+  }
+  if (missing.length) saveConfigText(`${text.trimEnd()}${eol}${eol}${missing.join(eol)}`);
+  else restrictConfigFile();
+  return { created: false, added };
+}
+
+/** Creates or completes config.env (see ensureConfigFile), then applies `changes` (e.g. { PORT: '8080' }). */
 export function writeConfig(changes = {}) {
-  let text = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE, 'utf8') : DEFAULT_CONFIG;
+  ensureConfigFile();
+  let text = fs.readFileSync(CONFIG_FILE, 'utf8');
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
   for (const [key, value] of Object.entries(changes)) {
     if (value === undefined) continue;
-    const line = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
-    text = line.test(text) ? text.replace(line, `${key}=${value}`) : `${text.trimEnd()}\n${key}=${value}\n`;
+    if (/[\r\n]/.test(value)) throw new ScriptError(`The value for ${key} can't contain a line break.`);
+    const line = new RegExp(`^[ \\t]*${key}[ \\t]*=.*$`, 'm');
+    // A function, so a $ in the value is not read as a replacement pattern.
+    const entry = `${key}=${value}`;
+    text = line.test(text) ? text.replace(line, () => entry) : `${text.trimEnd()}${eol}${entry}${eol}`;
   }
-  fs.writeFileSync(CONFIG_FILE, text);
+  saveConfigText(text);
   return readConfig();
 }
 
@@ -594,17 +772,22 @@ export async function restoreDatabase(backupFile, config = readConfig(), { aside
 /* Running the server                                                 */
 /* ------------------------------------------------------------------ */
 
-/** Environment for the production server: settings from config.env, absolute data folder. */
+/**
+ * Environment for the production server: every setting from config.env (the email settings included), absolute
+ * data folder. config.env decides each setting it can hold: one left empty there is unset, not taken from the
+ * environment of whoever started the app (so CLOUDFLARE_API_TOKEN= really means no email).
+ */
 function serverEnv(config, instance) {
-  const env = {
-    ...process.env,
+  const env = { ...process.env };
+  for (const key of CONFIG_KEYS) delete env[key];
+  Object.assign(env, config, {
     NODE_ENV: 'production',
     PORT: config.PORT || DEFAULT_PORT,
     HOST: config.HOST || DEFAULT_HOST,
     DATA_DIR: dataDir(config),
     REQUIRE_CODE_FOR_INVITES: config.REQUIRE_CODE_FOR_INVITES || '1',
     EXCEL_AUTOGRADER_INSTANCE: instance,
-  };
+  });
   delete env.EXCEL_AUTOGRADER_LOCK;
   return env;
 }

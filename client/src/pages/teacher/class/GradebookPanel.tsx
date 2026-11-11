@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   Anchor,
   Badge,
@@ -13,14 +12,14 @@ import {
   Tooltip,
   UnstyledButton,
 } from '@mantine/core';
-import { IconDownload, IconTable } from '@tabler/icons-react';
+import { IconDownload, IconFiles, IconFileTypePdf, IconTable } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import type { AssignmentSummary, GradebookCell, GradebookResponse, StudentInfo } from '@shared/types';
 import { endpoints, qk } from '../../../api/endpoints';
 import { QueryState } from '../../../components/QueryState';
 import { LateBadge, PendingBadge } from '../../../components/StatusBadges';
-import { notifyError } from '../../../utils/errors';
+import { useDownload } from '../../../utils/download';
 import { formatDateTime, formatScore, isPast, percent, scoreColor, scoreTextColor } from '../../../utils/format';
 import classes from './cards.module.css';
 
@@ -266,20 +265,37 @@ function GradebookTable({ data }: { data: GradebookResponse }) {
   );
 }
 
+function ExportButtons({ classId }: { classId: number }) {
+  const csv = useDownload(() => endpoints.downloadGradebookCsv(classId), 'Could not export the gradebook');
+  const pdf = useDownload(() => endpoints.downloadGradebookPdf(classId), 'Could not export the gradebook');
+  const reports = useDownload(
+    () => endpoints.downloadAllStudentReports(classId),
+    'Could not create the student reports',
+  );
+  return (
+    <Group gap="xs" wrap="wrap">
+      <Button variant="default" leftSection={<IconDownload size={18} />} loading={csv.pending} onClick={csv.start}>
+        Export CSV
+      </Button>
+      <Button variant="default" leftSection={<IconFileTypePdf size={18} />} loading={pdf.pending} onClick={pdf.start}>
+        Export PDF
+      </Button>
+      <Tooltip label="One report per student, each starting on a new page (for printing or parent conferences)">
+        <Button
+          variant="default"
+          leftSection={<IconFiles size={18} />}
+          loading={reports.pending}
+          onClick={reports.start}
+        >
+          All student reports (PDF)
+        </Button>
+      </Tooltip>
+    </Group>
+  );
+}
+
 export function GradebookPanel({ classId }: { classId: number }) {
   const query = useQuery({ queryKey: qk.gradebook(classId), queryFn: () => endpoints.getGradebook(classId) });
-  const [exporting, setExporting] = useState(false);
-
-  async function exportCsv() {
-    setExporting(true);
-    try {
-      await endpoints.downloadGradebookCsv(classId);
-    } catch (err) {
-      notifyError(err, 'Could not export the gradebook');
-    } finally {
-      setExporting(false);
-    }
-  }
 
   return (
     <QueryState query={query} loadingLabel="Loading gradebook…">
@@ -309,14 +325,7 @@ export function GradebookPanel({ classId }: { classId: number }) {
                 {data.assignments.length} {data.assignments.length === 1 ? 'assignment' : 'assignments'}. Select a
                 cell to view or grade that submission.
               </Text>
-              <Button
-                variant="default"
-                leftSection={<IconDownload size={18} />}
-                loading={exporting}
-                onClick={exportCsv}
-              >
-                Export CSV
-              </Button>
+              <ExportButtons classId={classId} />
             </Group>
             <GradebookTable data={data} />
             <Legend />
